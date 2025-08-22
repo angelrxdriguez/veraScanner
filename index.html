@@ -109,15 +109,16 @@
       .replace(/\s{2,}/g, ' ')
       .trim();
 
-async function initOCR() {
+let ocrInitPromise = null;
+
+async function buildWorker(langPath) {
   const workerPath = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js';
   const coreBase   = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0/dist/';
   const corePath   = (self.crossOriginIsolated)
     ? coreBase + 'tesseract-core-simd.wasm.js'
     : coreBase + 'tesseract-core.wasm.js';
-  const langPath   = 'https://tessdata.projectnaptha.com/5.0.0';
 
-  worker = await Tesseract.createWorker({
+  return Tesseract.createWorker({
     workerPath,
     corePath,
     langPath,
@@ -132,23 +133,53 @@ async function initOCR() {
       }
     }
   });
+}
 
-  try {
-    await worker.loadLanguage('spa+eng');
-    await worker.initialize('spa+eng');
-  } catch (e) {
-    console.warn('Fallo cargando spa+eng, probando spa → eng', e);
+async function initOCR() {
+  const langPaths = [
+    'https://tessdata.projectnaptha.com/5.0.0',
+    'https://tessdata.projectnaptha.com/4.0.0',
+    'https://cdn.jsdelivr.net/npm/tessdata@4.0.0'
+  ];
+
+  for (const lp of langPaths) {
     try {
-      await worker.loadLanguage('spa');
-      await worker.initialize('spa');
-    } catch (e2) {
-      await worker.loadLanguage('eng');
-      await worker.initialize('eng');
+      worker = await buildWorker(lp);
+      try {
+        await worker.loadLanguage('spa+eng');
+        await worker.initialize('spa+eng');
+      } catch (e) {
+        console.warn('spa+eng falló, probando spa/eng. langPath=', lp, e);
+        try {
+          await worker.loadLanguage('spa');
+          await worker.initialize('spa');
+        } catch {
+          await worker.loadLanguage('eng');
+          await worker.initialize('eng');
+        }
+      }
+      if (ocrLoading) ocrLoading.remove();
+      return; // listo
+    } catch (e) {
+      console.warn('Fallo creando/inyectando worker con langPath', lp, e);
+      try { await worker?.terminate(); } catch {}
+      worker = null; // reintenta con el siguiente langPath
     }
   }
-
-  if (ocrLoading) ocrLoading.remove();
+  throw new Error('No se pudo cargar Tesseract (lang data). Revisa red/CORS.');
 }
+
+async function ensureOCRReady() {
+  if (worker) return;
+  if (!ocrInitPromise) {
+    ocrInitPromise = initOCR().catch(err => {
+      ocrInitPromise = null; // permite reintentar si falló
+      throw err;
+    });
+  }
+  await ocrInitPromise;
+}
+
 
 async function startCamera() {
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -197,21 +228,24 @@ async function startCamera() {
       });
     }
 
-    async function doOCRFromBlob(blob) {
-      if (!worker) {
-        alert('OCR aún no cargado. Espera un momento.');
-        return;
-      }
-      showProgress(0);
-      const { data: { text } } = await worker.recognize(blob, {
-        // El logger de recognize se maneja a nivel worker global (arriba)
-      });
-      hideProgress();
-      const limpio = norm(text);
-      textoDetectado.textContent = limpio || '(sin texto)';
-      const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
-      modal.show();
-    }
+async function doOCRFromBlob(blob) {
+  try {
+    await ensureOCRReady(); // <-- clave
+  } catch (e) {
+    console.error(e);
+    alert('No se pudo cargar el motor OCR. Mira la consola para detalles.');
+    return;
+  }
+
+  showProgress(0);
+  const { data: { text } } = await worker.recognize(blob);
+  hideProgress();
+  const limpio = norm(text);
+  textoDetectado.textContent = limpio || '(sin texto)';
+  const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
+  modal.show();
+}
+
 
     // Eventos
     btnStart.addEventListener('click', startCamera);
@@ -243,8 +277,12 @@ async function startCamera() {
       } catch (e) { alert('No se pudo copiar al portapapeles.'); }
     });
 
-    // Inicializa OCR al cargar la página
-    (async () => { await initOCR(); })();
+// Precarga (opcional). Si tarda, ensureOCRReady() cubrirá al pulsar el botón.
+(async () => {
+  try { await initOCR(); } catch (e) { console.warn('Preload OCR falló, se reintentará al usar.', e); }
+})();
+
+    
   </script>
 </body>
 </html>
