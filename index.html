@@ -149,34 +149,38 @@
   }
 
   // --- OCR SIN WORKER (suficiente para el MVP y evita los errores) ---
-  async function doOCRFromBlob(blob) {
-    try {
-      if (ocrLoading) ocrLoading.remove();
-      showProgress(0.05); // arranca barra
-      const { data: { text } } = await Tesseract.recognize(
-        blob,
-        'spa', // solo español para aligerar
-        {
-          // Configuración simplificada que funciona
-          logger: m => {
-            if (m.status === 'loading tesseract core') showProgress(0.1);
-            else if (m.status === 'loading language traineddata') showProgress(0.3);
-            else if (m.status === 'initializing tesseract') showProgress(0.6);
-            else if (m.status === 'recognizing text') showProgress(0.8);
-            else if (m.status === 'done') showProgress(1);
-          }
-        }
-      );
-      hideProgress();
-      const limpio = norm(text);
-      textoDetectado.textContent = limpio || '(sin texto)';
-      new bootstrap.Modal(document.getElementById('resultadoModal')).show();
-    } catch (e) {
-      hideProgress();
-      console.error(e);
-      alert('No se pudo cargar/usar el OCR. Mira la consola (posible bloqueo de red/CORS).');
-    }
+ async function doOCRFromBlob(blob) {
+  try {
+    if (ocrLoading) ocrLoading.remove();
+    showProgress(0.05);
+
+    // Preprocesa la imagen antes del OCR
+    const processed = await preprocessBlob(blob);
+
+    // OCR en español, con segmentación tipo “bloque de texto”
+    const { data: { text } } = await Tesseract.recognize(
+      processed,
+      'spa',
+      {
+        // PSM 6 = Assume a single uniform block of text
+        psm: 6,
+        // (Opcional) limita el alfabeto si tus etiquetas son muy “ASCII”
+        // tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.,()%# ',
+        langPath: 'https://cdn.jsdelivr.net/npm/tessdata@4.0.0'
+      }
+    );
+
+    hideProgress();
+    const limpio = norm(text);
+    textoDetectado.textContent = limpio || '(sin texto)';
+    new bootstrap.Modal(document.getElementById('resultadoModal')).show();
+  } catch (e) {
+    hideProgress();
+    console.error(e);
+    alert('No se pudo usar el OCR. Mira la consola (posible bloqueo de red/CORS).');
   }
+}
+
 
   // --- Eventos ---
   btnStart.addEventListener('click', startCamera);
@@ -201,6 +205,54 @@
       btn.textContent = '¡Copiado!'; setTimeout(()=> btn.textContent = original, 1200);
     } catch { alert('No se pudo copiar al portapapeles.'); }
   });
+// Escala a ~1600 px lado mayor + mejora contraste + binariza sencillo
+async function preprocessBlob(blob) {
+  // Carga la imagen del blob
+  const img = await blobToImage(blob);
+
+  // Calcula tamaño destino (máx 1600px en el lado mayor)
+  const maxSide = 1600;
+  const scale = Math.min(maxSide / Math.max(img.width, img.height), 1) || 1;
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+
+  // Usa el mismo <canvas> que ya tienes
+  const ctx = canvas.getContext('2d');
+  canvas.width = w; canvas.height = h;
+
+  // 1) Filtro de alto contraste y algo más de brillo
+  ctx.filter = 'grayscale(100%) contrast(180%) brightness(115%)';
+  ctx.drawImage(img, 0, 0, w, h);
+  ctx.filter = 'none';
+
+  // 2) Binarización simple (umbral fijo rápido)
+  const id = ctx.getImageData(0, 0, w, h);
+  const data = id.data;
+  // Umbral 180 (ajústalo si hace falta)
+  const TH = 180;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i+1], b = data[i+2];
+    const lum = (r*0.299 + g*0.587 + b*0.114);
+    const v = lum > TH ? 255 : 0; // blanco/negro
+    data[i] = data[i+1] = data[i+2] = v;
+  }
+  ctx.putImageData(id, 0, 0);
+
+  // Devuelve un blob listo para OCR
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+}
+
+function blobToImage(blob) {
+  // createImageBitmap es rápido; si falla, cae a Image()
+  return new Promise(async (resolve) => {
+    if ('createImageBitmap' in window) {
+      try { return resolve(await createImageBitmap(blob)); } catch {}
+    }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.src = URL.createObjectURL(blob);
+  });
+}
 
   // Quitamos el preload/worker por completo para evitar 0% y errores
 </script>
