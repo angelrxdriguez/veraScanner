@@ -111,13 +111,8 @@
 
 let ocrInitPromise = null;
 
-async function buildWorker(langPath) {
+async function buildWorker(langPath, corePath) {
   const workerPath = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js';
-  const coreBase   = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0/dist/';
-  const corePath   = (self.crossOriginIsolated)
-    ? coreBase + 'tesseract-core-simd.wasm.js'
-    : coreBase + 'tesseract-core.wasm.js';
-
   return Tesseract.createWorker({
     workerPath,
     corePath,
@@ -136,34 +131,38 @@ async function buildWorker(langPath) {
 }
 
 async function initOCR() {
+  // Evita projectnaptha primero (adblock/CORS); usa jsDelivr
+  const coreBase = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0/dist/';
+  const corePath = (self.crossOriginIsolated)
+    ? coreBase + 'tesseract-core-simd.wasm.js'
+    : coreBase + 'tesseract-core.wasm.js';
+
   const langPaths = [
-    'https://tessdata.projectnaptha.com/5.0.0',
-    'https://tessdata.projectnaptha.com/4.0.0',
-    'https://cdn.jsdelivr.net/npm/tessdata@4.0.0'
+    'https://cdn.jsdelivr.net/npm/tessdata@4.0.0',   // <— PRIORIDAD 1 (jsDelivr)
+    'https://tessdata.projectnaptha.com/5.0.0',      // fallback
+    'https://tessdata.projectnaptha.com/4.0.0'       // fallback
   ];
 
   for (const lp of langPaths) {
     try {
-      worker = await buildWorker(lp);
+      worker = await buildWorker(lp, corePath);
       try {
         await worker.loadLanguage('spa+eng');
         await worker.initialize('spa+eng');
       } catch (e) {
         console.warn('spa+eng falló, probando spa/eng. langPath=', lp, e);
         try {
-          await worker.loadLanguage('spa');
-          await worker.initialize('spa');
+          await worker.loadLanguage('spa'); await worker.initialize('spa');
         } catch {
-          await worker.loadLanguage('eng');
-          await worker.initialize('eng');
+          await worker.loadLanguage('eng'); await worker.initialize('eng');
         }
       }
       if (ocrLoading) ocrLoading.remove();
       return; // listo
     } catch (e) {
-      console.warn('Fallo creando/inyectando worker con langPath', lp, e);
+      console.warn('Fallo creando/cargando worker con langPath', lp, e);
       try { await worker?.terminate(); } catch {}
-      worker = null; // reintenta con el siguiente langPath
+      worker = null;
     }
   }
   throw new Error('No se pudo cargar Tesseract (lang data). Revisa red/CORS.');
@@ -173,7 +172,7 @@ async function ensureOCRReady() {
   if (worker) return;
   if (!ocrInitPromise) {
     ocrInitPromise = initOCR().catch(err => {
-      ocrInitPromise = null; // permite reintentar si falló
+      ocrInitPromise = null; // permite reintentar
       throw err;
     });
   }
@@ -229,23 +228,47 @@ async function startCamera() {
     }
 
 async function doOCRFromBlob(blob) {
+  // Intenta worker “bien” primero
   try {
-    await ensureOCRReady(); // <-- clave
-  } catch (e) {
-    console.error(e);
-    alert('No se pudo cargar el motor OCR. Mira la consola para detalles.');
+    await ensureOCRReady();
+    showProgress(0);
+    const { data: { text } } = await worker.recognize(blob);
+    hideProgress();
+    const limpio = norm(text);
+    textoDetectado.textContent = limpio || '(sin texto)';
+    const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
+    modal.show();
     return;
+  } catch (e) {
+    console.warn('Fallo OCR con worker, intento simple sin worker…', e);
   }
 
-  showProgress(0);
-  const { data: { text } } = await worker.recognize(blob);
-  hideProgress();
-  const limpio = norm(text);
-  textoDetectado.textContent = limpio || '(sin texto)';
-  const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
-  modal.show();
+  // Fallback simple SIN worker (más lento, pero te saca del paso hoy)
+  try {
+    showProgress(0);
+    const { data: { text } } = await Tesseract.recognize(
+      blob,
+      'spa+eng',
+      {
+        logger: (m) => {
+          if (m.status === 'recognizing text' && typeof m.progress === 'number') {
+            showProgress(m.progress);
+          }
+        },
+        langPath: 'https://cdn.jsdelivr.net/npm/tessdata@4.0.0' // usa el mismo CDN robusto
+      }
+    );
+    hideProgress();
+    const limpio = norm(text);
+    textoDetectado.textContent = limpio || '(sin texto)';
+    const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
+    modal.show();
+  } catch (e2) {
+    hideProgress();
+    console.error(e2);
+    alert('No se pudo cargar el motor OCR. Abre la consola del navegador para ver el error exacto (CORS/red).');
+  }
 }
-
 
     // Eventos
     btnStart.addEventListener('click', startCamera);
