@@ -149,29 +149,47 @@
   }
 
   // --- OCR SIN WORKER (suficiente para el MVP y evita los errores) ---
- async function doOCRFromBlob(blob) {
+async function doOCRFromBlob(blob) {
   try {
     if (ocrLoading) ocrLoading.remove();
     showProgress(0.05);
 
-    // Preprocesa la imagen antes del OCR
-    const processed = await preprocessBlob(blob);
+    // 1) Preprocesa a BN en canvas
+    await preprocessToCanvas(blob);
 
-    // OCR en español, con segmentación tipo “bloque de texto”
-    const { data: { text } } = await Tesseract.recognize(
-      processed,
-      'spa',
-      {
-        // PSM 6 = Assume a single uniform block of text
-        psm: 6,
-        // (Opcional) limita el alfabeto si tus etiquetas son muy “ASCII”
-        // tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.,()%# ',
-        langPath: 'https://cdn.jsdelivr.net/npm/tessdata@4.0.0'
+    // 2) Prueba 0° y 90°; PSM 7 (línea) y 6 (bloque). Quédate con la mayor confianza.
+    const angles = [0, 90];
+    const psms = [7, 6]; // 7: single line, 6: block
+    let best = { conf: -1, text: '' };
+
+    for (const ang of angles) {
+      const testBlob = ang === 0 ? await new Promise(res => canvas.toBlob(res, 'image/png', 1))
+                                 : await rotateCanvasToBlob(ang);
+
+      for (const psm of psms) {
+        showProgress(0.1);
+        const { data } = await Tesseract.recognize(
+          testBlob,
+          'spa',
+          {
+            tessedit_pageseg_mode: psm,
+            user_defined_dpi: '300',
+            preserve_interword_spaces: '1',
+            // Si tus etiquetas son ASCII/nums mayormente, descomenta:
+            // tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚÜÑáéíóúüñ0123456789-_/.,()%# ',
+            langPath: 'https://cdn.jsdelivr.net/npm/tessdata@4.0.0'
+          }
+        );
+        const conf = (typeof data.confidence === 'number' ? data.confidence :
+                     (data.words && data.words.length
+                       ? data.words.reduce((a,w)=>a+(w.confidence||0),0)/data.words.length
+                       : 0));
+        if (conf > best.conf) best = { conf, text: data.text || '' };
       }
-    );
+    }
 
     hideProgress();
-    const limpio = norm(text);
+    const limpio = norm(best.text);
     textoDetectado.textContent = limpio || '(sin texto)';
     new bootstrap.Modal(document.getElementById('resultadoModal')).show();
   } catch (e) {
@@ -180,6 +198,7 @@
     alert('No se pudo usar el OCR. Mira la consola (posible bloqueo de red/CORS).');
   }
 }
+
 
 
   // --- Eventos ---
@@ -252,6 +271,91 @@ function blobToImage(blob) {
     img.onload = () => resolve(img);
     img.src = URL.createObjectURL(blob);
   });
+}
+// Convierte Blob -> Image (rápido con createImageBitmap)
+function blobToImage(blob) {
+  return new Promise(async (resolve) => {
+    if ('createImageBitmap' in window) {
+      try { return resolve(await createImageBitmap(blob)); } catch {}
+    }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+// Calcula umbral óptimo (Otsu) en escala de grises
+function otsuThreshold(imageData) {
+  const data = imageData.data;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = Math.round(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
+    hist[lum]++;
+  }
+  const total = data.length / 4;
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+
+  let sumB = 0, wB = 0, varMax = 0, thr = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (wB === 0) continue;
+    const wF = total - wB;
+    if (wF === 0) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if (between > varMax) { varMax = between; thr = t; }
+  }
+  return thr;
+}
+
+// Escala a ~1600px lado mayor, pasa a gris, Otsu, y deja TEXTO NEGRO sobre FONDO BLANCO
+async function preprocessToCanvas(blob) {
+  const img = await blobToImage(blob);
+
+  // tamaño destino (máx 1600px lado mayor)
+  const maxSide = 1600;
+  const scale = Math.min(maxSide / Math.max(img.width, img.height), 1) || 1;
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+
+  const ctx = canvas.getContext('2d');
+  canvas.width = w; canvas.height = h;
+
+  // gris + realce
+  ctx.filter = 'grayscale(100%) contrast(180%) brightness(115%)';
+  ctx.drawImage(img, 0, 0, w, h);
+  ctx.filter = 'none';
+
+  // binariza con Otsu
+  const id = ctx.getImageData(0, 0, w, h);
+  const data = id.data;
+  const TH = otsuThreshold(id);
+
+  // Queremos texto NEGRO (0) y fondo BLANCO (255)
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+    const v = lum > TH ? 255 : 0;
+    data[i] = data[i+1] = data[i+2] = v;
+    data[i+3] = 255;
+  }
+  ctx.putImageData(id, 0, 0);
+}
+
+// Gira lo que hay actualmente en canvas y devuelve un Blob PNG
+async function rotateCanvasToBlob(deg) {
+  const w = canvas.width, h = canvas.height;
+  const off = document.createElement('canvas');
+  if (deg % 180 === 0) { off.width = w; off.height = h; }
+  else { off.width = h; off.height = w; }
+  const ictx = off.getContext('2d');
+  ictx.translate(off.width/2, off.height/2);
+  ictx.rotate(deg * Math.PI / 180);
+  ictx.imageSmoothingEnabled = false;
+  ictx.drawImage(canvas, -w/2, -h/2);
+  return new Promise(r => off.toBlob(r, 'image/png', 1));
 }
 
   // Quitamos el preload/worker por completo para evitar 0% y errores
