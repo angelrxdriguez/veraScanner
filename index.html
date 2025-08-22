@@ -75,237 +75,162 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <!-- Tesseract.js v5 -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js" crossorigin="anonymous"></script>
-  <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const btnStart = document.getElementById('btnStart');
-    const btnCapture = document.getElementById('btnCapture');
-    const btnStop = document.getElementById('btnStop');
-    const fileInput = document.getElementById('fileInput');
-    const ocrProgressWrap = document.getElementById('ocrProgressWrap');
-    const ocrProgressBar = document.getElementById('ocrProgressBar');
-    const textoDetectado = document.getElementById('textoDetectado');
-    const ocrLoading = document.getElementById('ocrLoading');
-    const ocrLoadPct = document.getElementById('ocrLoadPct');
+ <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const btnStart = document.getElementById('btnStart');
+  const btnCapture = document.getElementById('btnCapture');
+  const btnStop = document.getElementById('btnStop');
+  const fileInput = document.getElementById('fileInput');
+  const ocrProgressWrap = document.getElementById('ocrProgressWrap');
+  const ocrProgressBar = document.getElementById('ocrProgressBar');
+  const textoDetectado = document.getElementById('textoDetectado');
+  const ocrLoading = document.getElementById('ocrLoading');
+  const ocrLoadPct = document.getElementById('ocrLoadPct');
 
-    let stream = null;
-    let worker = null;
+  let stream = null;
+  let worker = null;
+  let ocrInitPromise = null;
 
-    const showProgress = (p) => {
-      ocrProgressWrap.classList.remove('d-none');
-      const pct = Math.round((p || 0) * 100);
-      ocrProgressBar.style.width = pct + '%';
-      ocrProgressBar.textContent = pct + '%';
-    };
-    const hideProgress = () => {
-      ocrProgressWrap.classList.add('d-none');
-      ocrProgressBar.style.width = '0%';
-      ocrProgressBar.textContent = '';
-    };
+  const showProgress = (p=0) => {
+    ocrProgressWrap.classList.remove('d-none');
+    const pct = Math.round(p * 100);
+    ocrProgressBar.style.width = pct + '%';
+    ocrProgressBar.textContent = pct + '%';
+    if (ocrLoadPct) ocrLoadPct.textContent = pct + '%';
+  };
+  const hideProgress = () => {
+    ocrProgressWrap.classList.add('d-none');
+    ocrProgressBar.style.width = '0%';
+    ocrProgressBar.textContent = '';
+  };
+  const norm = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[\t\r]+/g,' ').replace(/\s{2,}/g,' ').trim();
 
-    const norm = (s) => s
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .replace(/[\t\r]+/g, ' ')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
+  // --- OCR ---
+  async function buildWorker() {
+    // Usamos unpkg (evita el 404 que viste en jsDelivr) y SIN logger (evita DataCloneError)
+    const workerPath = 'https://unpkg.com/tesseract.js@5/dist/worker.min.js';
+    const corePath   = 'https://unpkg.com/tesseract.js-core@5.0.0/dist/tesseract-core.wasm.js';
+    const langPath   = 'https://unpkg.com/tessdata@4.0.0';
+    return Tesseract.createWorker({ workerPath, corePath, langPath });
+  }
 
-let ocrInitPromise = null;
-
-async function buildWorker(langPath, corePath) {
-  const workerPath = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js';
-  return Tesseract.createWorker({
-    workerPath,
-    corePath,
-    langPath,
-    logger: (m) => {
-      if (m.status && typeof m.progress === 'number') {
-        if (ocrLoading && (m.status.includes('loading') || m.status.includes('initializing'))) {
-          ocrLoadPct.textContent = Math.round(m.progress * 100) + '%';
-        }
-        if (m.status === 'recognizing text') {
-          showProgress(m.progress);
-        }
-      }
-    }
-  });
-}
-
-async function initOCR() {
-  // Evita projectnaptha primero (adblock/CORS); usa jsDelivr
-  const coreBase = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0/dist/';
-  const corePath = (self.crossOriginIsolated)
-    ? coreBase + 'tesseract-core-simd.wasm.js'
-    : coreBase + 'tesseract-core.wasm.js';
-
-  const langPaths = [
-    'https://cdn.jsdelivr.net/npm/tessdata@4.0.0',   // <— PRIORIDAD 1 (jsDelivr)
-    'https://tessdata.projectnaptha.com/5.0.0',      // fallback
-    'https://tessdata.projectnaptha.com/4.0.0'       // fallback
-  ];
-
-  for (const lp of langPaths) {
+  async function initOCR() {
+    worker = await buildWorker();
     try {
-      worker = await buildWorker(lp, corePath);
-      try {
-        await worker.loadLanguage('spa+eng');
-        await worker.initialize('spa+eng');
-      } catch (e) {
-        console.warn('spa+eng falló, probando spa/eng. langPath=', lp, e);
-        try {
-          await worker.loadLanguage('spa'); await worker.initialize('spa');
-        } catch {
-          await worker.loadLanguage('eng'); await worker.initialize('eng');
-        }
-      }
-      if (ocrLoading) ocrLoading.remove();
-      return; // listo
+      // Solo español para aligerar descargas y reducir fallos
+      await worker.loadLanguage('spa');
+      await worker.initialize('spa');
     } catch (e) {
-      console.warn('Fallo creando/cargando worker con langPath', lp, e);
-      try { await worker?.terminate(); } catch {}
-      worker = null;
+      console.warn('spa falló, probando eng', e);
+      await worker.loadLanguage('eng');
+      await worker.initialize('eng');
     }
+    if (ocrLoading) ocrLoading.remove();
   }
-  throw new Error('No se pudo cargar Tesseract (lang data). Revisa red/CORS.');
-}
 
-async function ensureOCRReady() {
-  if (worker) return;
-  if (!ocrInitPromise) {
-    ocrInitPromise = initOCR().catch(err => {
-      ocrInitPromise = null; // permite reintentar
-      throw err;
-    });
+  async function ensureOCRReady() {
+    if (worker) return;
+    if (!ocrInitPromise) {
+      ocrInitPromise = initOCR().catch(err => { ocrInitPromise = null; throw err; });
+    }
+    await ocrInitPromise;
   }
-  await ocrInitPromise;
-}
 
-
-async function startCamera() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    alert('Tu navegador no permite acceso a la cámara. Usa la opción "Subir foto".');
-    return;
-      }
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
-          audio: false
-        });
-        video.srcObject = stream;
-        await video.play();
-        btnCapture.disabled = false;
-        btnStop.disabled = true; // lo habilitamos tras play estable
-        // A veces el video tarda en estar listo
-        video.onloadedmetadata = () => { btnStop.disabled = false; };
-      } catch (err) {
-        console.error(err);
-        alert('No se pudo acceder a la cámara. Revisa permisos y HTTPS.');
-      }
+  // --- Cámara ---
+  async function startCamera() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      alert('Tu navegador no permite acceso a la cámara. Usa "Subir foto".');
+      return;
     }
-
-    function stopCamera() {
-      if (stream) {
-        stream.getTracks().forEach(t => t.stop());
-        stream = null;
-      }
-      video.srcObject = null;
-      btnCapture.disabled = true;
-      btnStop.disabled = true;
-    }
-
-    function captureBlobFromVideo() {
-      const w = video.videoWidth || 1280;
-      const h = video.videoHeight || 720;
-      canvas.width = w; canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, w, h);
-      return new Promise((resolve) => {
-        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.92);
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
       });
+      video.srcObject = stream;
+      await video.play();
+      btnCapture.disabled = false;
+      video.onloadedmetadata = () => { btnStop.disabled = false; };
+    } catch (err) {
+      console.error(err);
+      alert('No se pudo acceder a la cámara. Revisa permisos y HTTPS.');
     }
-
-async function doOCRFromBlob(blob) {
-  // Intenta worker “bien” primero
-  try {
-    await ensureOCRReady();
-    showProgress(0);
-    const { data: { text } } = await worker.recognize(blob);
-    hideProgress();
-    const limpio = norm(text);
-    textoDetectado.textContent = limpio || '(sin texto)';
-    const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
-    modal.show();
-    return;
-  } catch (e) {
-    console.warn('Fallo OCR con worker, intento simple sin worker…', e);
+  }
+  function stopCamera() {
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    video.srcObject = null;
+    btnCapture.disabled = true;
+    btnStop.disabled = true;
+  }
+  function captureBlobFromVideo() {
+    const w = video.videoWidth || 1280;
+    const h = video.videoHeight || 720;
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, w, h);
+    return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.92));
   }
 
-  // Fallback simple SIN worker (más lento, pero te saca del paso hoy)
-  try {
-    showProgress(0);
-    const { data: { text } } = await Tesseract.recognize(
-      blob,
-      'spa+eng',
-      {
-        logger: (m) => {
-          if (m.status === 'recognizing text' && typeof m.progress === 'number') {
-            showProgress(m.progress);
-          }
-        },
-        langPath: 'https://cdn.jsdelivr.net/npm/tessdata@4.0.0' // usa el mismo CDN robusto
-      }
-    );
-    hideProgress();
-    const limpio = norm(text);
-    textoDetectado.textContent = limpio || '(sin texto)';
-    const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
-    modal.show();
-  } catch (e2) {
-    hideProgress();
-    console.error(e2);
-    alert('No se pudo cargar el motor OCR. Abre la consola del navegador para ver el error exacto (CORS/red).');
+  async function doOCRFromBlob(blob) {
+    // Intento con worker
+    try {
+      showProgress(0);
+      await ensureOCRReady();
+      const { data: { text } } = await worker.recognize(blob);
+      hideProgress();
+      const limpio = norm(text);
+      textoDetectado.textContent = limpio || '(sin texto)';
+      new bootstrap.Modal(document.getElementById('resultadoModal')).show();
+      return;
+    } catch (e) {
+      console.warn('Fallo OCR con worker, intento sin worker…', e);
+    }
+    // Fallback sin worker (más lento). Sin logger para evitar DataCloneError.
+    try {
+      showProgress(0);
+      const { data: { text } } = await Tesseract.recognize(
+        blob,
+        'spa',
+        { langPath: 'https://unpkg.com/tessdata@4.0.0' }
+      );
+      hideProgress();
+      const limpio = norm(text);
+      textoDetectado.textContent = limpio || '(sin texto)';
+      new bootstrap.Modal(document.getElementById('resultadoModal')).show();
+    } catch (e2) {
+      hideProgress();
+      console.error(e2);
+      alert('No se pudo cargar/usar el motor OCR. Mira la consola (posible bloqueo CORS o red).');
+    }
   }
-}
 
-    // Eventos
-    btnStart.addEventListener('click', startCamera);
-    btnStop.addEventListener('click', stopCamera);
-    btnCapture.addEventListener('click', async () => {
-      try {
-        const blob = await captureBlobFromVideo();
-        await doOCRFromBlob(blob);
-      } catch (e) {
-        console.error(e);
-        alert('No se pudo capturar/leer la imagen.');
-      }
-    });
+  // --- Eventos ---
+  btnStart.addEventListener('click', startCamera);
+  btnStop.addEventListener('click', stopCamera);
+  btnCapture.addEventListener('click', async () => {
+    try {
+      const blob = await captureBlobFromVideo();
+      await doOCRFromBlob(blob);
+    } catch (e) { console.error(e); alert('No se pudo capturar/leer la imagen.'); }
+  });
+  fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    await doOCRFromBlob(file); fileInput.value = '';
+  });
+  document.getElementById('btnCopiar').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(textoDetectado.textContent || '');
+      const btn = document.getElementById('btnCopiar'); const original = btn.textContent;
+      btn.textContent = '¡Copiado!'; setTimeout(()=> btn.textContent = original, 1200);
+    } catch { alert('No se pudo copiar al portapapeles.'); }
+  });
 
-    fileInput.addEventListener('change', async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      await doOCRFromBlob(file);
-      fileInput.value = '';
-    });
+  // Precarga (no bloquea si falla)
+  (async () => { try { await initOCR(); } catch (e) { console.warn('Preload OCR falló; se reintentará al usar.', e); } })();
+</script>
 
-    document.getElementById('btnCopiar').addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(textoDetectado.textContent || '');
-        const btn = document.getElementById('btnCopiar');
-        const original = btn.textContent;
-        btn.textContent = '¡Copiado!';
-        setTimeout(()=> btn.textContent = original, 1200);
-      } catch (e) { alert('No se pudo copiar al portapapeles.'); }
-    });
-
-// Precarga (opcional). Si tarda, ensureOCRReady() cubrirá al pulsar el botón.
-(async () => {
-  try { await initOCR(); } catch (e) { console.warn('Preload OCR falló, se reintentará al usar.', e); }
-})();
-
-    
-  </script>
 </body>
 </html>
