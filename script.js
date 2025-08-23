@@ -9,11 +9,44 @@ const ocrProgressWrap = document.getElementById('ocrProgressWrap');
 const ocrProgressBar = document.getElementById('ocrProgressBar');
 const textoDetectado = document.getElementById('textoDetectado');
 const ocrLoading = document.getElementById('ocrLoading');
+const flashOverlay = document.getElementById('flashOverlay');
 
 let stream = null;
 
 // Ocultar mensaje de carga inicial
 ocrLoading.style.display = 'none';
+
+// Efecto de flash al capturar
+function triggerFlash() {
+  flashOverlay.classList.add('active');
+  setTimeout(() => {
+    flashOverlay.classList.remove('active');
+  }, 300);
+}
+
+// Sonido de captura (opcional)
+function playShutterSound() {
+  // Crear un sonido de captura simple usando Web Audio API
+  try {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+    oscillator.frequency.setValueAtTime(400, audioContext.currentTime + 0.1);
+    
+    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+    
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.2);
+  } catch (e) {
+    // Si no funciona el audio, no pasa nada
+  }
+}
 
 // Funciones de progreso
 const showProgress = () => {
@@ -54,14 +87,16 @@ async function startCamera() {
     await video.play();
     
     btnCapture.disabled = false;
+    btnCapture.classList.remove('processing');
     btnStop.disabled = false;
-    btnStart.textContent = '✅ Cámara activa';
+    btnStart.textContent = '✅ Cámara Activa';
+    btnStart.disabled = true;
     console.log('Cámara iniciada correctamente');
 
   } catch (err) {
     console.error('Error:', err);
     btnStart.disabled = false;
-    btnStart.textContent = '🔓 Permitir cámara';
+    btnStart.textContent = '🔓 Activar Cámara';
     alert('No se pudo acceder a la cámara. Verifica los permisos.');
   }
 }
@@ -75,9 +110,10 @@ function stopCamera() {
   
   video.srcObject = null;
   btnCapture.disabled = true;
+  btnCapture.classList.remove('processing');
   btnStop.disabled = true;
   btnStart.disabled = false;
-  btnStart.textContent = '🔓 Permitir cámara';
+  btnStart.textContent = '🔓 Activar Cámara';
 }
 
 // Capturar imagen del video
@@ -208,18 +244,25 @@ btnStop.addEventListener('click', stopCamera);
 
 btnCapture.addEventListener('click', async () => {
   try {
-    btnCapture.disabled = true;
-    btnCapture.textContent = 'Capturando...';
+    // Efectos visuales inmediatos
+    triggerFlash();
+    playShutterSound();
+    btnCapture.classList.add('processing');
+    btnCapture.innerHTML = '⏳';
     
+    // Capturar imagen inmediatamente
     const imageData = captureImage();
+    console.log('Imagen capturada, procesando OCR...');
+    
+    // Procesar OCR
     await processOCR(imageData);
     
   } catch (error) {
     console.error('Error:', error);
     alert('Error al capturar la imagen');
   } finally {
-    btnCapture.disabled = false;
-    btnCapture.textContent = '📸 Capturar & OCR';
+    btnCapture.classList.remove('processing');
+    btnCapture.innerHTML = '📸';
   }
 });
 

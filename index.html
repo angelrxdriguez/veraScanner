@@ -9,8 +9,91 @@
   <style>
     body { background: #0f1115; color: #e8eaf0; }
     .app { max-width: 900px; }
-    video { width: 100%; border-radius: 12px; background: #000; }
+    
+    /* Video y cámara */
+    .camera-container { 
+      position: relative; 
+      border-radius: 20px; 
+      overflow: hidden; 
+      background: #000; 
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    video { width: 100%; display: block; }
     canvas { display: none; }
+    
+    /* Overlay de flash */
+    .flash-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: white;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .flash-overlay.active {
+      animation: flash-effect 0.3s ease-out;
+    }
+    
+    /* Botón de captura grande */
+    .capture-btn-container {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 5;
+    }
+    .capture-btn {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      border: 4px solid white;
+      background: #ff4757;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+      color: white;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 20px rgba(255, 71, 87, 0.4);
+    }
+    .capture-btn:hover {
+      transform: scale(1.1);
+      box-shadow: 0 6px 25px rgba(255, 71, 87, 0.6);
+    }
+    .capture-btn:active {
+      transform: scale(0.95);
+    }
+    .capture-btn.processing {
+      background: #ffa502;
+      animation: pulse 1s infinite;
+    }
+    
+    /* Controles superiores */
+    .camera-controls {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      z-index: 5;
+      display: flex;
+      gap: 10px;
+    }
+    .control-btn {
+      background: rgba(0,0,0,0.6);
+      border: none;
+      color: white;
+      padding: 8px 12px;
+      border-radius: 20px;
+      font-size: 0.9rem;
+      backdrop-filter: blur(10px);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .control-btn:hover {
+      background: rgba(0,0,0,0.8);
+    }
+    
+    /* Estilos generales */
     .btn-primary { background: #7a7617; border-color: #7a7617; }
     .btn-primary:hover { background: #686316; border-color: #686316; }
     .progress { height: 8px; border-radius: 999px; }
@@ -21,9 +104,21 @@
       background-size: 200% 100%;
       animation: progress-animation 1.5s infinite linear;
     }
+    
+    /* Animaciones */
     @keyframes progress-animation {
       0% { background-position: 200% 0; }
       100% { background-position: -200% 0; }
+    }
+    @keyframes flash-effect {
+      0% { opacity: 0; }
+      50% { opacity: 0.8; }
+      100% { opacity: 0; }
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 4px 20px rgba(255, 165, 2, 0.4); }
+      50% { box-shadow: 0 4px 20px rgba(255, 165, 2, 0.8); }
+      100% { box-shadow: 0 4px 20px rgba(255, 165, 2, 0.4); }
     }
   </style>
 </head>
@@ -40,16 +135,29 @@
 
     <!-- Vista de cámara -->
     <div class="mb-3">
-      <video id="video" playsinline autoplay muted></video>
-      <canvas id="canvas"></canvas>
+      <div class="camera-container">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="canvas"></canvas>
+        
+        <!-- Overlay de flash -->
+        <div id="flashOverlay" class="flash-overlay"></div>
+        
+        <!-- Controles superiores -->
+        <div class="camera-controls">
+          <button id="btnStop" class="control-btn" disabled>🛑 Parar</button>
+        </div>
+        
+        <!-- Botón de captura grande -->
+        <div class="capture-btn-container">
+          <button id="btnCapture" class="capture-btn" disabled>📸</button>
+        </div>
+      </div>
     </div>
 
-    <div class="d-flex flex-wrap gap-2 mb-3">
-      <button id="btnStart" class="btn btn-primary">🔓 Permitir cámara</button>
-      <button id="btnCapture" class="btn btn-outline-light" disabled>📸 Capturar & OCR</button>
-      <button id="btnStop" class="btn btn-outline-light" disabled>🛑 Parar cámara</button>
-      <label class="btn btn-outline-light mb-0">
-        📁 Subir foto
+    <div class="d-flex flex-wrap gap-2 mb-3 justify-content-center">
+      <button id="btnStart" class="btn btn-primary btn-lg">🔓 Activar Cámara</button>
+      <label class="btn btn-outline-light">
+        📁 Subir Foto
         <input id="fileInput" type="file" accept="image/*" capture="environment" hidden>
       </label>
     </div>
