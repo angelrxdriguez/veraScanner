@@ -127,6 +127,20 @@ h1, h2, h3, .title {
   background-size: 200% 100%;
   animation: progress-animation 1.5s infinite linear;
 }
+/* Giro suave para loaders */
+.ri-spin {
+  display: inline-block;
+  animation: ri-spin 1s linear infinite;
+}
+@keyframes ri-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* (opcional) efecto de “proceso” en el botón */
+.capture-btn.processing {
+  pointer-events: none;
+  opacity: .9;
+}
 
 /* Animaciones */
 @keyframes progress-animation {

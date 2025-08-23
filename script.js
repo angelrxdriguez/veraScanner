@@ -96,7 +96,7 @@ async function startCamera() {
   } catch (err) {
     console.error('Error:', err);
     btnStart.disabled = false;
-    btnStart.textContent = '🔓 Activar Cámara';
+    btnStart.textContent = 'Activar';
     alert('No se pudo acceder a la cámara. Verifica los permisos.');
   }
 }
@@ -113,7 +113,7 @@ function stopCamera() {
   btnCapture.classList.remove('processing');
   btnStop.disabled = true;
   btnStart.disabled = false;
-  btnStart.textContent = '🔓 Activar Cámara';
+  btnStart.textContent = 'Activar';
 }
 
 // Capturar imagen del video
@@ -247,24 +247,34 @@ btnCapture.addEventListener('click', async () => {
     // Efectos visuales inmediatos
     triggerFlash();
     playShutterSound();
+
     btnCapture.classList.add('processing');
-    btnCapture.innerHTML = '⏳';
-    
+    btnCapture.setAttribute('aria-busy', 'true');
+    btnCapture.disabled = true;
+
+    // Loader animado (círculo girando)
+    btnCapture.innerHTML = '<i class="ri-loader-4-line ri-spin"></i>';
+
     // Capturar imagen inmediatamente
     const imageData = captureImage();
     console.log('Imagen capturada, procesando OCR...');
-    
+
     // Procesar OCR
     await processOCR(imageData);
-    
+
   } catch (error) {
     console.error('Error:', error);
     alert('Error al capturar la imagen');
   } finally {
     btnCapture.classList.remove('processing');
-    btnCapture.innerHTML = '📸';
+    btnCapture.removeAttribute('aria-busy');
+    btnCapture.disabled = false;
+
+    // Volver al icono de cámara
+    btnCapture.innerHTML = '<i class="ri-camera-line"></i>';
   }
 });
+
 
 fileInput.addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
