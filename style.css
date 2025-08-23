@@ -1,0 +1,145 @@
+/* Estilos base */
+body { 
+  background-color: #e5e2dc !important; 
+  color: #333 !important; 
+  font-family: "Poppins", sans-serif !important;
+  font-weight: 500 !important;
+  font-style: normal !important;
+}
+
+.app { 
+  max-width: 900px; 
+  margin: auto;
+}
+.tit{
+    background-color: #7a7617 !important;
+    padding: 15px;
+    color: white;
+    border-radius: 40px;
+}
+/* Video y cámara */
+.camera-container { 
+  position: relative; 
+  border-radius: 20px; 
+  overflow: hidden; 
+  background: #000; 
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+video { width: 100%; display: block; }
+canvas { display: none; }
+
+/* Overlay de flash */
+.flash-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: white;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+.flash-overlay.active {
+  animation: flash-effect 0.3s ease-out;
+}
+
+/* Botón de captura grande */
+.capture-btn-container {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+}
+.capture-btn {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 4px solid #fff;
+  background: #7a7617; /* tono corporativo */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 20px rgba(122, 118, 23, 0.4);
+}
+.capture-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 25px rgba(122, 118, 23, 0.6);
+}
+.capture-btn:active {
+  transform: scale(0.95);
+}
+.capture-btn.processing {
+  background: #85725e;
+  animation: pulse 1s infinite;
+}
+
+/* Controles superiores */
+.camera-controls {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  z-index: 5;
+  display: flex;
+  gap: 10px;
+}
+.control-btn {
+  background: rgba(133,114,94,0.9);
+  border: none;
+  color: white;
+  padding: 8px 12px;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.control-btn:hover {
+  background: rgba(122,118,23,0.9);
+}
+
+/* Botones */
+.btn-primary { 
+  background-color: #7a7617 !important; 
+  border: none !important;
+}
+.btn-primary:hover { background-color: #686316 !important; }
+
+.btn-success { 
+  background-color: #7a7617 !important; 
+  border: none !important;
+}
+
+/* Títulos */
+h1, h2, h3, .title {
+  background-color: #85725e !important;
+  color: #fff !important;
+  padding: 10px 15px;
+  border-radius: 8px;
+}
+
+/* Progress bar */
+.progress { height: 8px; border-radius: 999px; }
+.progress-bar-animated { 
+  background: linear-gradient(45deg, #7a7617, #686316, #7a7617, #686316);
+  background-size: 200% 100%;
+  animation: progress-animation 1.5s infinite linear;
+}
+
+/* Animaciones */
+@keyframes progress-animation {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@keyframes flash-effect {
+  0% { opacity: 0; }
+  50% { opacity: 0.8; }
+  100% { opacity: 0; }
+}
+@keyframes pulse {
+  0% { box-shadow: 0 4px 20px rgba(133, 114, 94, 0.4); }
+  50% { box-shadow: 0 4px 20px rgba(133, 114, 94, 0.8); }
+  100% { box-shadow: 0 4px 20px rgba(133, 114, 94, 0.4); }
+}
