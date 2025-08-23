@@ -64,9 +64,9 @@
         video.srcObject = stream;
         await video.play();
         btnCapture.disabled = false;
-        btnStop.disabled = true; // lo habilitamos tras play estable
-        // A veces el video tarda en estar listo
-        video.onloadedmetadata = () => { btnStop.disabled = false; };
+        btnStop.disabled = false;
+        btnStart.textContent = '✅ Cámara activa';
+        btnStart.disabled = true;
       } catch (err) {
         console.error(err);
         alert('No se pudo acceder a la cámara. Revisa permisos y HTTPS.');
@@ -81,6 +81,8 @@
       video.srcObject = null;
       btnCapture.disabled = true;
       btnStop.disabled = true;
+      btnStart.disabled = false;
+      btnStart.textContent = '🔓 Permitir cámara';
     }
 
     function captureBlobFromVideo() {
@@ -101,7 +103,11 @@
       }
       showProgress(0);
       const { data: { text } } = await worker.recognize(blob, {
-        // El logger de recognize se maneja a nivel worker global (arriba)
+        logger: (m) => {
+          if (m.status && typeof m.progress === 'number') {
+            showProgress(m.progress);
+          }
+        }
       });
       hideProgress();
       const limpio = norm(text);
