@@ -13,25 +13,52 @@ const flashOverlay = document.getElementById('flashOverlay');
 const btnLeer = document.getElementById('btnLeer'); 
 
 let stream = null;
-/* ========= TTS (Text-To-Speech) con Web Speech API ========= */
+
+//voces. Pruebas pq me aburro
+const vozSelect = document.getElementById('vozSelect');
 const synth = 'speechSynthesis' in window ? window.speechSynthesis : null;
+let vocesDisponibles = [];
 let ttsVoice = null;
 let currentUtterance = null;
 
-function loadVoicesPreferSpanish() {
+function poblarVoces() {
   if (!synth) return;
-  const voices = synth.getVoices();
-  // Preferimos español (es-ES / es-MX), luego cualquiera
-  ttsVoice =
-    voices.find(v => /^es(-|_)?/i.test(v.lang) && /Google|Microsoft|Apple|Samantha|Monica/i.test(v.name)) ||
-    voices.find(v => /^es(-|_)?/i.test(v.lang)) ||
-    voices[0] || null;
+  vocesDisponibles = synth.getVoices();
+
+  // Filtra y prioriza español; si no hay, muestra todas
+  const esVoces = vocesDisponibles.filter(v => /^es(-|_)?/i.test(v.lang));
+  const lista = esVoces.length ? esVoces : vocesDisponibles;
+
+  vozSelect.innerHTML = '<option value="">Voz (auto)</option>';
+  lista.forEach((v, idx) => {
+    const opt = document.createElement('option');
+    opt.value = v.name;
+    opt.textContent = `${v.name} (${v.lang})`;
+    vozSelect.appendChild(opt);
+  });
+
+  // Intenta recordar la última voz elegida
+  const saved = localStorage.getItem('vozPreferida');
+  if (saved && lista.some(v => v.name === saved)) {
+    vozSelect.value = saved;
+    ttsVoice = lista.find(v => v.name === saved);
+  } else {
+    // Heurística: coge la primera española disponible
+    ttsVoice = esVoces[0] || lista[0] || null;
+    if (ttsVoice) vozSelect.value = ttsVoice.name;
+  }
 }
+
 if (synth) {
-  loadVoicesPreferSpanish();
-  // Algunos navegadores cargan las voces de forma asíncrona
-  window.speechSynthesis.onvoiceschanged = loadVoicesPreferSpanish;
+  poblarVoces();
+  window.speechSynthesis.onvoiceschanged = poblarVoces;
 }
+
+vozSelect?.addEventListener('change', () => {
+  const sel = vozSelect.value;
+  ttsVoice = vocesDisponibles.find(v => v.name === sel) || null;
+  localStorage.setItem('vozPreferida', sel || '');
+});
 
 function isSpeaking() {
   return synth && (synth.speaking || synth.pending);
@@ -39,41 +66,65 @@ function isSpeaking() {
 
 function setLeerButtonState(state) {
   if (!btnLeer) return;
-  if (state === 'reading') {
-    btnLeer.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> Leyendo...';
-    btnLeer.disabled = false; // dejamos que pueda pulsar para parar
-  } else {
-    btnLeer.innerHTML = '<i class="ri-volume-up-line"></i> Leer';
-    btnLeer.disabled = false;
+  btnLeer.innerHTML = state === 'reading'
+    ? '<i class="ri-loader-4-line ri-spin"></i> Leyendo...'
+    : '<i class="ri-volume-up-line"></i> Leer';
+}
+
+function chunkText(text, maxLen = 180) {
+  // Divide por frases para que suene más natural
+  const parts = [];
+  const sentences = text
+    .replace(/\s+/g, ' ')
+    .split(/([.!?…]\s+)/);
+
+  let buffer = '';
+  for (let i = 0; i < sentences.length; i++) {
+    const piece = sentences[i];
+    if (!piece) continue;
+    if ((buffer + piece).length > maxLen) {
+      if (buffer) parts.push(buffer.trim());
+      buffer = piece;
+    } else {
+      buffer += piece;
+    }
   }
+  if (buffer.trim()) parts.push(buffer.trim());
+  return parts.length ? parts : [text];
 }
 
 function speakText(text) {
   if (!synth) {
-    alert('Tu navegador no soporta lectura por voz (Web Speech API).');
+    alert('Tu navegador no soporta lectura por voz.');
     return;
   }
   if (!text || !text.trim()) return;
 
-  // Si está leyendo, al pulsar de nuevo paramos
-  if (isSpeaking()) {
-    stopSpeaking();
-    return;
+  // Toggle parar
+  if (isSpeaking()) { stopSpeaking(); return; }
+
+  const trozos = chunkText(text);
+  setLeerButtonState('reading');
+
+  // Cadena de utterances
+  function speakNext(idx) {
+    if (idx >= trozos.length) { setLeerButtonState('idle'); return; }
+    const u = new SpeechSynthesisUtterance(trozos[idx]);
+    if (ttsVoice) u.voice = ttsVoice;
+    u.lang = ttsVoice?.lang || 'es-ES';
+    u.rate = 0.98;  // más natural
+    u.pitch = 1.0;
+    u.volume = 1.0;
+
+    u.onend = () => speakNext(idx + 1);
+    u.onerror = () => setLeerButtonState('idle');
+
+    currentUtterance = u;
+    synth.speak(u);
   }
 
-  currentUtterance = new SpeechSynthesisUtterance(text);
-  if (ttsVoice) currentUtterance.voice = ttsVoice;
-  currentUtterance.lang = ttsVoice?.lang || 'es-ES';
-  currentUtterance.rate = 0.95;   // velocidad (0.1–10)
-  currentUtterance.pitch = 1.0;   // tono (0–2)
-  currentUtterance.volume = 1.0;  // volumen (0–1)
-
-  currentUtterance.onstart = () => setLeerButtonState('reading');
-  currentUtterance.onend = () => setLeerButtonState('idle');
-  currentUtterance.onerror = () => setLeerButtonState('idle');
-
-  synth.cancel(); // cancelamos cualquier cola previa
-  synth.speak(currentUtterance);
+  synth.cancel();
+  speakNext(0);
 }
 
 function stopSpeaking() {
@@ -82,17 +133,13 @@ function stopSpeaking() {
   setLeerButtonState('idle');
 }
 
-// Click en "Leer"
 btnLeer?.addEventListener('click', () => {
-  const text = textoDetectado.textContent || '';
+  const text = (document.getElementById('textoDetectado')?.textContent || '').trim();
   speakText(text);
 });
 
-// Al cerrar el modal, paramos la lectura (por si seguía sonando)
-document.getElementById('resultadoModal')?.addEventListener('hidden.bs.modal', () => {
-  stopSpeaking();
-});
-/* ========= /TTS ========= */
+document.getElementById('resultadoModal')?.addEventListener('hidden.bs.modal', stopSpeaking);
+
 // Ocultar mensaje de carga inicial
 ocrLoading.style.display = 'none';
 
