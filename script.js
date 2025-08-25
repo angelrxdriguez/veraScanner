@@ -10,9 +10,89 @@ const ocrProgressBar = document.getElementById('ocrProgressBar');
 const textoDetectado = document.getElementById('textoDetectado');
 const ocrLoading = document.getElementById('ocrLoading');
 const flashOverlay = document.getElementById('flashOverlay');
+const btnLeer = document.getElementById('btnLeer'); 
 
 let stream = null;
+/* ========= TTS (Text-To-Speech) con Web Speech API ========= */
+const synth = 'speechSynthesis' in window ? window.speechSynthesis : null;
+let ttsVoice = null;
+let currentUtterance = null;
 
+function loadVoicesPreferSpanish() {
+  if (!synth) return;
+  const voices = synth.getVoices();
+  // Preferimos español (es-ES / es-MX), luego cualquiera
+  ttsVoice =
+    voices.find(v => /^es(-|_)?/i.test(v.lang) && /Google|Microsoft|Apple|Samantha|Monica/i.test(v.name)) ||
+    voices.find(v => /^es(-|_)?/i.test(v.lang)) ||
+    voices[0] || null;
+}
+if (synth) {
+  loadVoicesPreferSpanish();
+  // Algunos navegadores cargan las voces de forma asíncrona
+  window.speechSynthesis.onvoiceschanged = loadVoicesPreferSpanish;
+}
+
+function isSpeaking() {
+  return synth && (synth.speaking || synth.pending);
+}
+
+function setLeerButtonState(state) {
+  if (!btnLeer) return;
+  if (state === 'reading') {
+    btnLeer.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> Leyendo...';
+    btnLeer.disabled = false; // dejamos que pueda pulsar para parar
+  } else {
+    btnLeer.innerHTML = '<i class="ri-volume-up-line"></i> Leer';
+    btnLeer.disabled = false;
+  }
+}
+
+function speakText(text) {
+  if (!synth) {
+    alert('Tu navegador no soporta lectura por voz (Web Speech API).');
+    return;
+  }
+  if (!text || !text.trim()) return;
+
+  // Si está leyendo, al pulsar de nuevo paramos
+  if (isSpeaking()) {
+    stopSpeaking();
+    return;
+  }
+
+  currentUtterance = new SpeechSynthesisUtterance(text);
+  if (ttsVoice) currentUtterance.voice = ttsVoice;
+  currentUtterance.lang = ttsVoice?.lang || 'es-ES';
+  currentUtterance.rate = 0.95;   // velocidad (0.1–10)
+  currentUtterance.pitch = 1.0;   // tono (0–2)
+  currentUtterance.volume = 1.0;  // volumen (0–1)
+
+  currentUtterance.onstart = () => setLeerButtonState('reading');
+  currentUtterance.onend = () => setLeerButtonState('idle');
+  currentUtterance.onerror = () => setLeerButtonState('idle');
+
+  synth.cancel(); // cancelamos cualquier cola previa
+  synth.speak(currentUtterance);
+}
+
+function stopSpeaking() {
+  if (!synth) return;
+  synth.cancel();
+  setLeerButtonState('idle');
+}
+
+// Click en "Leer"
+btnLeer?.addEventListener('click', () => {
+  const text = textoDetectado.textContent || '';
+  speakText(text);
+});
+
+// Al cerrar el modal, paramos la lectura (por si seguía sonando)
+document.getElementById('resultadoModal')?.addEventListener('hidden.bs.modal', () => {
+  stopSpeaking();
+});
+/* ========= /TTS ========= */
 // Ocultar mensaje de carga inicial
 ocrLoading.style.display = 'none';
 
@@ -89,7 +169,7 @@ async function startCamera() {
     btnCapture.disabled = false;
     btnCapture.classList.remove('processing');
     btnStop.disabled = false;
-    btnStart.textContent = '✅ Cámara Activa';
+    btnStart.textContent = 'Cámara Activa';
     btnStart.disabled = true;
     console.log('Cámara iniciada correctamente');
 
