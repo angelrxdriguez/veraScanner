@@ -74,32 +74,24 @@
 
     <p class="small text-secondary text-center">Consejo: encuadra solo la etiqueta, evita brillos y usa la linterna si tu navegador lo permite.</p>
 
-<!-- Modal resultado -->
-<div class="modal fade" id="resultadoModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content bg-dark text-light">
-      <div class="modal-header">
-        <h5 class="modal-title">Texto detectado</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <pre id="textoDetectado" class="mb-0" style="white-space: pre-wrap; word-break: break-word;"></pre>
-      </div>
-      <div class="modal-footer">
-        <button id="btnLeer" type="button" class="btn btn-success">
-          <i class="ri-volume-up-line"></i> Leer
-        </button>
-        <select id="vozSelect" class="form-select form-select-sm w-auto">
-  <option value="">Voz (auto)</option>
-</select>
-
-        <button id="btnCopiar" type="button" class="btn btn-primary">Copiar</button>
-        <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Cerrar</button>
+    <!-- Modal resultado -->
+    <div class="modal fade" id="resultadoModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content bg-dark text-light">
+          <div class="modal-header">
+            <h5 class="modal-title">Texto detectado</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <pre id="textoDetectado" class="mb-0" style="white-space: pre-wrap; word-break: break-word;"></pre>
+          </div>
+          <div class="modal-footer">
+            <button id="btnCopiar" type="button" class="btn btn-primary">Copiar</button>
+            <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Cerrar</button>
+          </div>
+        </div>
       </div>
     </div>
-  </div>
-</div>
-
   </main>
 
 <!-- Bootstrap JS -->

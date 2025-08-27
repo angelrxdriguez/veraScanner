@@ -10,135 +10,8 @@ const ocrProgressBar = document.getElementById('ocrProgressBar');
 const textoDetectado = document.getElementById('textoDetectado');
 const ocrLoading = document.getElementById('ocrLoading');
 const flashOverlay = document.getElementById('flashOverlay');
-const btnLeer = document.getElementById('btnLeer'); 
 
 let stream = null;
-
-//voces. Pruebas pq me aburro
-const vozSelect = document.getElementById('vozSelect');
-const synth = 'speechSynthesis' in window ? window.speechSynthesis : null;
-let vocesDisponibles = [];
-let ttsVoice = null;
-let currentUtterance = null;
-
-function poblarVoces() {
-  if (!synth) return;
-  vocesDisponibles = synth.getVoices();
-
-  // Filtra y prioriza español; si no hay, muestra todas
-  const esVoces = vocesDisponibles.filter(v => /^es(-|_)?/i.test(v.lang));
-  const lista = esVoces.length ? esVoces : vocesDisponibles;
-
-  vozSelect.innerHTML = '<option value="">Voz (auto)</option>';
-  lista.forEach((v, idx) => {
-    const opt = document.createElement('option');
-    opt.value = v.name;
-    opt.textContent = `${v.name} (${v.lang})`;
-    vozSelect.appendChild(opt);
-  });
-
-  // Intenta recordar la última voz elegida
-  const saved = localStorage.getItem('vozPreferida');
-  if (saved && lista.some(v => v.name === saved)) {
-    vozSelect.value = saved;
-    ttsVoice = lista.find(v => v.name === saved);
-  } else {
-    // Heurística: coge la primera española disponible
-    ttsVoice = esVoces[0] || lista[0] || null;
-    if (ttsVoice) vozSelect.value = ttsVoice.name;
-  }
-}
-
-if (synth) {
-  poblarVoces();
-  window.speechSynthesis.onvoiceschanged = poblarVoces;
-}
-
-vozSelect?.addEventListener('change', () => {
-  const sel = vozSelect.value;
-  ttsVoice = vocesDisponibles.find(v => v.name === sel) || null;
-  localStorage.setItem('vozPreferida', sel || '');
-});
-
-function isSpeaking() {
-  return synth && (synth.speaking || synth.pending);
-}
-
-function setLeerButtonState(state) {
-  if (!btnLeer) return;
-  btnLeer.innerHTML = state === 'reading'
-    ? '<i class="ri-loader-4-line ri-spin"></i> Leyendo...'
-    : '<i class="ri-volume-up-line"></i> Leer';
-}
-
-function chunkText(text, maxLen = 180) {
-  // Divide por frases para que suene más natural
-  const parts = [];
-  const sentences = text
-    .replace(/\s+/g, ' ')
-    .split(/([.!?…]\s+)/);
-
-  let buffer = '';
-  for (let i = 0; i < sentences.length; i++) {
-    const piece = sentences[i];
-    if (!piece) continue;
-    if ((buffer + piece).length > maxLen) {
-      if (buffer) parts.push(buffer.trim());
-      buffer = piece;
-    } else {
-      buffer += piece;
-    }
-  }
-  if (buffer.trim()) parts.push(buffer.trim());
-  return parts.length ? parts : [text];
-}
-
-function speakText(text) {
-  if (!synth) {
-    alert('Tu navegador no soporta lectura por voz.');
-    return;
-  }
-  if (!text || !text.trim()) return;
-
-  // Toggle parar
-  if (isSpeaking()) { stopSpeaking(); return; }
-
-  const trozos = chunkText(text);
-  setLeerButtonState('reading');
-
-  // Cadena de utterances
-  function speakNext(idx) {
-    if (idx >= trozos.length) { setLeerButtonState('idle'); return; }
-    const u = new SpeechSynthesisUtterance(trozos[idx]);
-    if (ttsVoice) u.voice = ttsVoice;
-    u.lang = ttsVoice?.lang || 'es-ES';
-    u.rate = 0.98;  // más natural
-    u.pitch = 1.0;
-    u.volume = 1.0;
-
-    u.onend = () => speakNext(idx + 1);
-    u.onerror = () => setLeerButtonState('idle');
-
-    currentUtterance = u;
-    synth.speak(u);
-  }
-
-  synth.cancel();
-  speakNext(0);
-}
-
-function stopSpeaking() {
-  if (!synth) return;
-  synth.cancel();
-  setLeerButtonState('idle');
-}
-
-btnLeer?.addEventListener('click', () => {
-  const text = (document.getElementById('textoDetectado')?.textContent || '').trim();
-  speakText(text);
-});
-
-document.getElementById('resultadoModal')?.addEventListener('hidden.bs.modal', stopSpeaking);
 
 // Ocultar mensaje de carga inicial
 ocrLoading.style.display = 'none';
@@ -216,7 +89,7 @@ async function startCamera() {
     btnCapture.disabled = false;
     btnCapture.classList.remove('processing');
     btnStop.disabled = false;
-    btnStart.textContent = 'Cámara Activa';
+    btnStart.textContent = '✅ Cámara Activa';
     btnStart.disabled = true;
     console.log('Cámara iniciada correctamente');
 
