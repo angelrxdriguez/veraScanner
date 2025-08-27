@@ -177,22 +177,33 @@ async function processOCR(imageData) {
 
     hideProgress();
 
-    if (result.ParsedResults && result.ParsedResults.length > 0) {
-      const text = result.ParsedResults[0].ParsedText || '';
-      const cleanText = text.trim();
-      
-      if (cleanText) {
-        textoDetectado.textContent = cleanText;
-      } else {
-        textoDetectado.textContent = 'No se detectó texto en la imagen.';
-      }
-    } else {
-      textoDetectado.textContent = 'No se pudo procesar la imagen.';
-    }
+let cleanText = '';
+if (result.ParsedResults && result.ParsedResults.length > 0) {
+  cleanText = (result.ParsedResults[0].ParsedText || '').trim();
+}
 
-    // Mostrar modal
-    const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
-    modal.show();
+if (!cleanText) {
+  textoDetectado.textContent = 'No se detectó texto en la imagen.';
+} else {
+  // 🔮 Paso IA: pedir SOLO la variedad detectada
+  textoDetectado.textContent = 'Detectando variedad…';
+  const inferencia = await detectarVariedadIA(cleanText);
+
+  if (inferencia && inferencia.variedad) {
+    // Muestra ÚNICAMENTE la variedad
+    textoDetectado.textContent = inferencia.variedad;
+    // (Opcional) muestra la confianza/evidencia en consola
+    console.log('Variedad IA:', inferencia.variedad, 'conf:', inferencia.conf, 'evidencia:', inferencia.evidencia);
+  } else {
+    // Fallback si la IA no devuelve nada: aviso corto
+    textoDetectado.textContent = 'No se pudo inferir la variedad.';
+  }
+}
+
+// Mostrar modal
+const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
+modal.show();
+
 
   } catch (error) {
     hideProgress();
@@ -316,5 +327,44 @@ document.getElementById('btnCopiar').addEventListener('click', async () => {
 window.addEventListener('beforeunload', () => {
   stopCamera();
 });
+// --- UTILIDADES ---
+function normalizarTexto(s) {
+  if (!s) return '';
+  const sinTildes = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return sinTildes
+    .toUpperCase()
+    .replace(/[•·•·•·]/g, ' ')
+    .replace(/[^\w\s\-\+\/x]/g, ' ')   // conserva -, +, / y 'x' (variedad)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Llama a la IA (vía PHP) para detectar la variedad más probable.
+// Devuelve { variedad: string, conf: number, evidencia?: string } o null si falla.
+async function detectarVariedadIA(ocrText) {
+  try {
+    const resp = await fetch('php/detectar_variedad.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ocr_text: ocrText,
+        ocr_text_normalizado: normalizarTexto(ocrText)
+      })
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if (data && data.success && data.variedad) {
+      return {
+        variedad: data.variedad,
+        conf: typeof data.conf === 'number' ? data.conf : null,
+        evidencia: data.evidencia || ''
+      };
+    }
+    return null;
+  } catch (e) {
+    console.warn('detectarVariedadIA fallo:', e);
+    return null;
+  }
+}
 
 console.log('Script cargado correctamente - Listo para usar');
