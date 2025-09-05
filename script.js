@@ -198,7 +198,7 @@ if (result.ParsedResults && result.ParsedResults.length > 0) {
       let resultado = `VARIEDAD DETECTADA:\n${inferencia.variedad}`;
       
       if (inferencia.vuelo) {
-        resultado += `\n\nVUELO:\n${inferencia.vuelo}`;
+        resultado += `\n\nVUELO DETECTADO:\n${inferencia.vuelo}`;
       }
       
       if (inferencia.cultivo) {
@@ -229,8 +229,20 @@ if (result.ParsedResults && result.ParsedResults.length > 0) {
         evidencia: inferencia.evidencia
       });
     } else {
-      // Fallback con más información
-      textoDetectado.textContent = `❌ No se pudo detectar oferta.\n\n📝 Texto detectado:\n${cleanText}\n\n💡 Intenta con mejor iluminación o enfoque.`;
+      // Fallback con información de vuelo si se detectó
+      let resultado = `❌ No se pudo detectar oferta específica.`;
+      
+      if (inferencia && inferencia.vuelo) {
+        resultado += `\n\nVUELO DETECTADO:\n${inferencia.vuelo}`;
+      }
+      
+      if (inferencia && inferencia.cultivo_detectado) {
+        resultado += `\n\nCULTIVO DETECTADO:\n${inferencia.cultivo_detectado}`;
+      }
+      
+      resultado += `\n\nTexto detectado:\n${cleanText}\n\n💡 Intenta con mejor iluminación o enfoque.`;
+      
+      textoDetectado.textContent = resultado;
       console.log('No se pudo detectar oferta para el texto:', cleanText);
     }
   }
