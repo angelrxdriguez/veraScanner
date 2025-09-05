@@ -86,6 +86,29 @@ foreach ($datos as $row) {
   }
 }
 
+// --- Extrae número de vuelo ---
+$numeroVuelo = '';
+if (preg_match('/:\d{3}-\d{4}\s+\d{4}/', $ocrn, $m)) {
+  $numeroVuelo = $m[0];
+  // Limpiar los dos puntos del inicio
+  $numeroVuelo = ltrim($numeroVuelo, ':');
+}
+
+// --- Extrae cultivo ---
+$cultivoDetectado = '';
+// Obtener lista de cultivos únicos de la base de datos
+$cultivosConocidos = array_unique(array_filter(array_map(function($oferta) {
+  return $oferta['cultivo'] ?? null;
+}, $ofertas)));
+
+// Buscar cultivos conocidos en el texto OCR
+foreach ($cultivosConocidos as $cultivo) {
+  if ($cultivo && strpos($ocrn, $cultivo) !== false) {
+    $cultivoDetectado = $cultivo;
+    break;
+  }
+}
+
 // --- Extrae patrones numéricos del OCR ---
 $patrones = [];
 
@@ -115,34 +138,81 @@ $tokensFuerte = array_filter($tokensOCR, function($t) {
   return !in_array($t, $stop);
 });
 
-// --- Construye SHORTLIST por intersección de primer token ---
+// --- Construye SHORTLIST priorizando por vuelo + cultivo + variedad ---
 $shortlist = [];
-$maxPorToken = 6;  // cap por familia
-foreach ($tokensFuerte as $tok) {
-  if (!isset($porPrimerToken[$tok])) continue;
-  $candidatosFamilia = $porPrimerToken[$tok];
 
-  // Si hay patrones numéricos, prioriza los que los contienen
-  $preferidos = [];
-  $otros = [];
-  foreach ($candidatosFamilia as $cand) {
-    $cNorm = normalizar($cand['variedad']);
-    $matchNum = false;
-    foreach ($patrones as $p) {
-      if (strpos($cNorm, $p) !== false) { $matchNum = true; break; }
+// 1. Si hay número de vuelo, buscar ofertas que coincidan exactamente
+if ($numeroVuelo) {
+  foreach ($ofertas as $oferta) {
+    $vueloOferta = $oferta['vuelo'] ?? '';
+    if ($vueloOferta && strpos($vueloOferta, $numeroVuelo) !== false) {
+      $shortlist[] = $oferta;
     }
-    if ($matchNum) $preferidos[] = $cand; else $otros[] = $cand;
-  }
-
-  $ordenados = array_merge($preferidos, $otros);
-  foreach ($ordenados as $cand) {
-    if (count($shortlist) >= 20) break 2;
-    if (!in_array($cand, $shortlist, true)) $shortlist[] = $cand;
-    if (--$maxPorToken <= 0) break;
   }
 }
 
-// Si no hay shortlist, mete algunos patrones genéricos (top por frecuencia no la tenemos, así que toma primeras)
+// 2. Si hay cultivo detectado, filtrar por cultivo también
+if ($cultivoDetectado && count($shortlist) > 0) {
+  $shortlistFiltrado = [];
+  foreach ($shortlist as $oferta) {
+    $cultivoOferta = $oferta['cultivo'] ?? '';
+    if ($cultivoOferta && strpos($cultivoOferta, $cultivoDetectado) !== false) {
+      $shortlistFiltrado[] = $oferta;
+    }
+  }
+  if (count($shortlistFiltrado) > 0) {
+    $shortlist = $shortlistFiltrado;
+  }
+}
+
+// 3. Si no hay coincidencias por vuelo o no hay vuelo, usar cultivo + tokens fuertes
+if (count($shortlist) < 5) {
+  $candidatos = $ofertas;
+  
+  // Filtrar por cultivo si está detectado
+  if ($cultivoDetectado) {
+    $candidatosFiltrados = [];
+    foreach ($candidatos as $oferta) {
+      $cultivoOferta = $oferta['cultivo'] ?? '';
+      if ($cultivoOferta && strpos($cultivoOferta, $cultivoDetectado) !== false) {
+        $candidatosFiltrados[] = $oferta;
+      }
+    }
+    if (count($candidatosFiltrados) > 0) {
+      $candidatos = $candidatosFiltrados;
+    }
+  }
+  
+  // Usar tokens fuertes en los candidatos filtrados
+  $maxPorToken = 6;  // cap por familia
+  foreach ($tokensFuerte as $tok) {
+    if (!isset($porPrimerToken[$tok])) continue;
+    $candidatosFamilia = array_filter($porPrimerToken[$tok], function($cand) use ($candidatos) {
+      return in_array($cand, $candidatos, true);
+    });
+
+    // Si hay patrones numéricos, prioriza los que los contienen
+    $preferidos = [];
+    $otros = [];
+    foreach ($candidatosFamilia as $cand) {
+      $cNorm = normalizar($cand['variedad']);
+      $matchNum = false;
+      foreach ($patrones as $p) {
+        if (strpos($cNorm, $p) !== false) { $matchNum = true; break; }
+      }
+      if ($matchNum) $preferidos[] = $cand; else $otros[] = $cand;
+    }
+
+    $ordenados = array_merge($preferidos, $otros);
+    foreach ($ordenados as $cand) {
+      if (count($shortlist) >= 20) break 2;
+      if (!in_array($cand, $shortlist, true)) $shortlist[] = $cand;
+      if (--$maxPorToken <= 0) break;
+    }
+  }
+}
+
+// 4. Si no hay shortlist, mete algunos patrones genéricos
 if (!count($shortlist)) {
   $shortlist = array_slice($ofertas, 0, 12);
 }
@@ -388,6 +458,8 @@ echo json_encode([
   'variedad' => $variedad,
   'cultivo' => $cultivo,
   'cliente' => $cliente,
+  'vuelo' => $numeroVuelo,
+  'cultivo_detectado' => $cultivoDetectado,
   'conf' => $conf,
   'evidencia' => $evidencia,
 ]);

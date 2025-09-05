@@ -197,6 +197,10 @@ if (result.ParsedResults && result.ParsedResults.length > 0) {
       // Muestra la variedad con información adicional
       let resultado = `VARIEDAD DETECTADA:\n${inferencia.variedad}`;
       
+      if (inferencia.vuelo) {
+        resultado += `\n\nVUELO:\n${inferencia.vuelo}`;
+      }
+      
       if (inferencia.cultivo) {
         resultado += `\n\nCULTIVO:\n${inferencia.cultivo}`;
       }
@@ -218,6 +222,7 @@ if (result.ParsedResults && result.ParsedResults.length > 0) {
       // Log completo en consola
       console.log('Oferta detectada:', {
         variedad: inferencia.variedad,
+        vuelo: inferencia.vuelo,
         cultivo: inferencia.cultivo,
         cliente: inferencia.cliente,
         conf: inferencia.conf,
@@ -386,8 +391,10 @@ async function detectarVariedadIA(ocrText) {
     if (data && data.success && data.variedad) {
       return {
         variedad: data.variedad,
+        vuelo: data.vuelo || '',
         cultivo: data.cultivo || '',
         cliente: data.cliente || '',
+        cultivo_detectado: data.cultivo_detectado || '',
         conf: typeof data.conf === 'number' ? data.conf : null,
         evidencia: data.evidencia || ''
       };
