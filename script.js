@@ -182,23 +182,36 @@ if (result.ParsedResults && result.ParsedResults.length > 0) {
   cleanText = (result.ParsedResults[0].ParsedText || '').trim();
 }
 
-if (!cleanText) {
-  textoDetectado.textContent = 'No se detectó texto en la imagen.';
-} else {
-  // 🔮 Paso IA: pedir SOLO la variedad detectada
-  textoDetectado.textContent = 'Detectando variedad…';
-  const inferencia = await detectarVariedadIA(cleanText);
-
-  if (inferencia && inferencia.variedad) {
-    // Muestra ÚNICAMENTE la variedad
-    textoDetectado.textContent = inferencia.variedad;
-    // (Opcional) muestra la confianza/evidencia en consola
-    console.log('Variedad IA:', inferencia.variedad, 'conf:', inferencia.conf, 'evidencia:', inferencia.evidencia);
+  if (!cleanText) {
+    textoDetectado.textContent = 'No se detectó texto en la imagen.';
   } else {
-    // Fallback si la IA no devuelve nada: aviso corto
-    textoDetectado.textContent = 'No se pudo inferir la variedad.';
+    // Mostrar texto detectado para debug
+    console.log('Texto OCR detectado:', cleanText);
+    console.log('Texto normalizado:', normalizarTexto(cleanText));
+    
+    // 🔮 Paso IA: pedir SOLO la variedad detectada
+    textoDetectado.textContent = 'Detectando variedad…';
+    const inferencia = await detectarVariedadIA(cleanText);
+
+    if (inferencia && inferencia.variedad) {
+      // Muestra la variedad con información adicional
+      let resultado = `VARIEDAD DETECTADA:\n${inferencia.variedad}`;
+      if (inferencia.conf) {
+        resultado += `\n\nConfianza: ${Math.round(inferencia.conf * 100)}%`;
+      }
+      if (inferencia.evidencia) {
+        resultado += `\n\nEvidencia: ${inferencia.evidencia}`;
+      }
+      textoDetectado.textContent = resultado;
+      
+      // Log completo en consola
+      console.log('Variedad IA:', inferencia.variedad, 'conf:', inferencia.conf, 'evidencia:', inferencia.evidencia);
+    } else {
+      // Fallback con más información
+      textoDetectado.textContent = `No se pudo detectar variedad.\n\nTexto detectado:\n${cleanText}\n\nIntenta con mejor iluminación o enfoque.`;
+      console.log('No se pudo detectar variedad para el texto:', cleanText);
+    }
   }
-}
 
 // Mostrar modal
 const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
@@ -343,7 +356,7 @@ function normalizarTexto(s) {
 // Devuelve { variedad: string, conf: number, evidencia?: string } o null si falla.
 async function detectarVariedadIA(ocrText) {
   try {
-    const resp = await fetch('php/detectar_variedad.php', {
+    const resp = await fetch('php/detectar_variedades.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -363,6 +376,7 @@ async function detectarVariedadIA(ocrText) {
     return null;
   } catch (e) {
     console.warn('detectarVariedadIA fallo:', e);
+    console.log('Texto OCR que causó el error:', ocrText);
     return null;
   }
 }

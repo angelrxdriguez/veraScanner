@@ -187,10 +187,14 @@ function call_ollama_chat($model, $system, $user) {
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
     CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
-    CURLOPT_TIMEOUT => 10
+    CURLOPT_TIMEOUT => 5, // Reducido para fallback más rápido
+    CURLOPT_CONNECTTIMEOUT => 2
   ]);
   $out = curl_exec($ch);
-  if ($out === false) return null;
+  if ($out === false) {
+    curl_close($ch);
+    return null;
+  }
   $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
   curl_close($ch);
   if ($code !== 200) return null;
@@ -226,54 +230,98 @@ if ($resp) {
 
 // --- Fallback heurístico si la IA no produjo salida usable ---
 if (!$ollamaOk || $variedad === '') {
-  // Heurística: buscar línea con 'VARIETY' y la palabra fuerte siguiente,
-  // y números (50 y 4 → "50-4").
-  $lineas = preg_split('/\r?\n/', $ocrn);
-  $posVariety = -1;
-  foreach ($lineas as $i => $ln) {
-    if (strpos($ln, 'VARIETY') !== false || strpos($ln, 'VAR:') !== false || strpos($ln, 'VARIEDAD') !== false) {
-      $posVariety = $i; break;
-    }
-  }
-  $candidata = '';
-  if ($posVariety >= 0) {
-    for ($j = $posVariety + 1; $j < min($posVariety + 5, count($lineas)); $j++) {
-      $ln = trim($lineas[$j]);
-      if (!$ln) continue;
-      // primera palabra fuerte
-      if (preg_match('/^[A-Z0-9][A-Z0-9\-\/ ]{2,}$/', $ln)) {
-        $candidata = trim($ln);
-        break;
+  // Heurística mejorada: buscar coincidencias directas en la shortlist
+  $mejorCoincidencia = '';
+  $mejorScore = 0;
+  
+  foreach ($shortlist as $candidato) {
+    $candidatoNorm = normalizar($candidato);
+    $score = 0;
+    
+    // Coincidencia exacta
+    if (strpos($ocrn, $candidatoNorm) !== false) {
+      $score = 1.0;
+    } else {
+      // Coincidencia parcial por palabras
+      $palabrasCandidato = preg_split('/\s+/', $candidatoNorm);
+      $palabrasOCR = preg_split('/\s+/', $ocrn);
+      $coincidencias = 0;
+      
+      foreach ($palabrasCandidato as $palabra) {
+        if (strlen($palabra) >= 3) { // Solo palabras significativas
+          foreach ($palabrasOCR as $palabraOCR) {
+            if (strpos($palabraOCR, $palabra) !== false || strpos($palabra, $palabraOCR) !== false) {
+              $coincidencias++;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (count($palabrasCandidato) > 0) {
+        $score = $coincidencias / count($palabrasCandidato);
       }
     }
-  }
-  // Números tipo 50-4
-  $numPat = '';
-  if (preg_match('/\b\d{2,3}-\d{1,3}\b/', $ocrn, $m)) $numPat = $m[0];
-  // o x500
-  if (!$numPat && preg_match('/x\d{2,4}\b/i', $ocrn, $m)) $numPat = strtoupper($m[0]);
-
-  if ($candidata && $numPat) {
-    $variedad = trim(preg_replace('/\s+/', ' ', $candidata . ' ' . $numPat));
-    $conf = 0.62;
-    $evidencia = 'Heurística VARIETY + patrón ' . $numPat;
-  } elseif ($candidata) {
-    $variedad = $candidata;
-    $conf = 0.55;
-    $evidencia = 'Heurística VARIETY vecina';
-  } elseif ($numPat) {
-    // Busca un token fuerte antes del patrón
-    if (preg_match('/([A-Z]{3,})(?:\s+[A-Z]{3,}){0,2}\s+' . preg_quote($numPat, '/') . '/u', $ocrn, $m2)) {
-      $variedad = trim($m2[0]);
-      $conf = 0.58;
-      $evidencia = 'Heurística token fuerte + ' . $numPat;
-    } else {
-      $variedad = $numPat;
-      $conf = 0.45;
-      $evidencia = 'Solo patrón numérico';
+    
+    if ($score > $mejorScore) {
+      $mejorScore = $score;
+      $mejorCoincidencia = $candidato;
     }
+  }
+  
+  if ($mejorScore > 0.3) { // Umbral mínimo de confianza
+    $variedad = $mejorCoincidencia;
+    $conf = $mejorScore;
+    $evidencia = 'Coincidencia heurística (' . round($mejorScore * 100) . '%)';
   } else {
-    $variedad = '';
+    // Fallback original: buscar línea con 'VARIETY' y la palabra fuerte siguiente
+    $lineas = preg_split('/\r?\n/', $ocrn);
+    $posVariety = -1;
+    foreach ($lineas as $i => $ln) {
+      if (strpos($ln, 'VARIETY') !== false || strpos($ln, 'VAR:') !== false || strpos($ln, 'VARIEDAD') !== false) {
+        $posVariety = $i; break;
+      }
+    }
+    $candidata = '';
+    if ($posVariety >= 0) {
+      for ($j = $posVariety + 1; $j < min($posVariety + 5, count($lineas)); $j++) {
+        $ln = trim($lineas[$j]);
+        if (!$ln) continue;
+        // primera palabra fuerte
+        if (preg_match('/^[A-Z0-9][A-Z0-9\-\/ ]{2,}$/', $ln)) {
+          $candidata = trim($ln);
+          break;
+        }
+      }
+    }
+    // Números tipo 50-4
+    $numPat = '';
+    if (preg_match('/\b\d{2,3}-\d{1,3}\b/', $ocrn, $m)) $numPat = $m[0];
+    // o x500
+    if (!$numPat && preg_match('/x\d{2,4}\b/i', $ocrn, $m)) $numPat = strtoupper($m[0]);
+
+    if ($candidata && $numPat) {
+      $variedad = trim(preg_replace('/\s+/', ' ', $candidata . ' ' . $numPat));
+      $conf = 0.62;
+      $evidencia = 'Heurística VARIETY + patrón ' . $numPat;
+    } elseif ($candidata) {
+      $variedad = $candidata;
+      $conf = 0.55;
+      $evidencia = 'Heurística VARIETY vecina';
+    } elseif ($numPat) {
+      // Busca un token fuerte antes del patrón
+      if (preg_match('/([A-Z]{3,})(?:\s+[A-Z]{3,}){0,2}\s+' . preg_quote($numPat, '/') . '/u', $ocrn, $m2)) {
+        $variedad = trim($m2[0]);
+        $conf = 0.58;
+        $evidencia = 'Heurística token fuerte + ' . $numPat;
+      } else {
+        $variedad = $numPat;
+        $conf = 0.45;
+        $evidencia = 'Solo patrón numérico';
+      }
+    } else {
+      $variedad = '';
+    }
   }
 }
 
