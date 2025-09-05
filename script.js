@@ -189,6 +189,12 @@ if (result.ParsedResults && result.ParsedResults.length > 0) {
     console.log('Texto OCR detectado:', cleanText);
     console.log('Texto normalizado:', normalizarTexto(cleanText));
     
+    // Detectar vuelo en el lado del cliente para debug
+    const vueloDetectado = detectarVuelo(cleanText);
+    if (vueloDetectado) {
+      console.log('Vuelo detectado en cliente:', vueloDetectado);
+    }
+    
     // 🔮 Paso IA: pedir SOLO la variedad detectada
     textoDetectado.textContent = 'Detectando variedad…';
     const inferencia = await detectarVariedadIA(cleanText);
@@ -384,6 +390,34 @@ function normalizarTexto(s) {
     .replace(/[^\w\s\-\+\/x]/g, ' ')   // conserva -, +, / y 'x' (variedad)
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function detectarVuelo(texto) {
+  if (!texto) return '';
+  
+  // Patrones para detectar vuelos
+  const patronesVuelo = [
+    /:\d{3}-\d{4}\s+\d{4}/,           // :999-9999 9999
+    /:\d{3}-\d{4}\s\d{4}/,            // :999-9999 9999 (sin espacio extra)
+    /\d{3}-\d{4}\s+\d{4}/,            // 999-9999 9999 (sin dos puntos)
+    /\d{3}-\d{4}\s\d{4}/,             // 999-9999 9999 (sin espacio extra)
+    /:\d{3}-\d{4}\d{4}/,              // :999-9999999 (sin espacio)
+    /\d{3}-\d{4}\d{4}/,               // 999-9999999 (sin espacio y sin dos puntos)
+    /:\d{3}-\d{4}/,                   // :999-9999 (solo primera parte)
+    /\d{3}-\d{4}/,                    // 999-9999 (solo primera parte, sin dos puntos)
+  ];
+  
+  for (const patron of patronesVuelo) {
+    const match = texto.match(patron);
+    if (match) {
+      let vuelo = match[0];
+      // Limpiar los dos puntos del inicio si existen
+      vuelo = vuelo.replace(/^:/, '');
+      return vuelo;
+    }
+  }
+  
+  return '';
 }
 
 // Llama a la IA (vía PHP) para detectar la variedad más probable.

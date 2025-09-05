@@ -88,11 +88,29 @@ foreach ($datos as $row) {
 
 // --- Extrae número de vuelo ---
 $numeroVuelo = '';
-if (preg_match('/:\d{3}-\d{4}\s+\d{4}/', $ocrn, $m)) {
-  $numeroVuelo = $m[0];
-  // Limpiar los dos puntos del inicio
-  $numeroVuelo = ltrim($numeroVuelo, ':');
+// Patrones más flexibles para detectar vuelos
+$patronesVuelo = [
+  '/:\d{3}-\d{4}\s+\d{4}/',           // :999-9999 9999
+  '/:\d{3}-\d{4}\s\d{4}/',            // :999-9999 9999 (sin espacio extra)
+  '/\d{3}-\d{4}\s+\d{4}/',            // 999-9999 9999 (sin dos puntos)
+  '/\d{3}-\d{4}\s\d{4}/',             // 999-9999 9999 (sin espacio extra)
+  '/:\d{3}-\d{4}\d{4}/',              // :999-9999999 (sin espacio)
+  '/\d{3}-\d{4}\d{4}/',               // 999-9999999 (sin espacio y sin dos puntos)
+  '/:\d{3}-\d{4}/',                   // :999-9999 (solo primera parte)
+  '/\d{3}-\d{4}/',                    // 999-9999 (solo primera parte, sin dos puntos)
+];
+
+foreach ($patronesVuelo as $patron) {
+  if (preg_match($patron, $ocrn, $m)) {
+    $numeroVuelo = $m[0];
+    // Limpiar los dos puntos del inicio si existen
+    $numeroVuelo = ltrim($numeroVuelo, ':');
+    break;
+  }
 }
+
+// Debug: log del vuelo detectado
+error_log("Vuelo detectado: '$numeroVuelo' en texto: '$ocrn'");
 
 // --- Extrae cultivo ---
 $cultivoDetectado = '';
