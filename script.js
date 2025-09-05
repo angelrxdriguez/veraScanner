@@ -195,22 +195,22 @@ if (result.ParsedResults && result.ParsedResults.length > 0) {
 
     if (inferencia && inferencia.variedad) {
       // Muestra la variedad con información adicional
-      let resultado = `🌹 VARIEDAD DETECTADA:\n${inferencia.variedad}`;
+      let resultado = `VARIEDAD DETECTADA:\n${inferencia.variedad}`;
       
       if (inferencia.cultivo) {
-        resultado += `\n\n🏭 CULTIVO:\n${inferencia.cultivo}`;
+        resultado += `\n\nCULTIVO:\n${inferencia.cultivo}`;
       }
       
       if (inferencia.cliente) {
-        resultado += `\n\n👤 CLIENTE:\n${inferencia.cliente}`;
+        resultado += `\n\nCLIENTE:\n${inferencia.cliente}`;
       }
       
       if (inferencia.conf) {
-        resultado += `\n\n📊 Confianza: ${Math.round(inferencia.conf * 100)}%`;
+        resultado += `\n\nConfianza: ${Math.round(inferencia.conf * 100)}%`;
       }
       
       if (inferencia.evidencia) {
-        resultado += `\n\n🔍 Evidencia: ${inferencia.evidencia}`;
+        resultado += `\n\nEvidencia: ${inferencia.evidencia}`;
       }
       
       textoDetectado.textContent = resultado;
