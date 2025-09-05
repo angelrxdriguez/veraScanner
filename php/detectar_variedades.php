@@ -23,25 +23,31 @@ function normalizar($s) {
   $s = strtoupper($s);
   $s = preg_replace('/[^\w\s\-\+\/x]/u', ' ', $s); // conserva -, +, / y x
   $s = preg_replace('/\s+/', ' ', $s);
-  return trim($s);
+  $s = trim($s);
+  
+  // Normalizar patrones comunes de variedades
+  $s = preg_replace('/\b(\d+)\s*-\s*(\d+)\b/', '$1-$2', $s); // 60 - 4 -> 60-4
+  $s = preg_replace('/\bx\s*(\d+)\b/i', 'x$1', $s); // x 500 -> x500
+  
+  return $s;
 }
 
 $ocrn = $ocrn ? $ocrn : normalizar($ocr_text);
 
-// --- Cargar variedades.json ---
-$path1 = __DIR__ . '/../variedades.json';
-$path2 = __DIR__ . '/../../variedades.json';
+// --- Cargar ofertas.json ---
+$path1 = __DIR__ . '/../ofertas.json';
+$path2 = __DIR__ . '/../../ofertas.json';
 $path  = file_exists($path1) ? $path1 : (file_exists($path2) ? $path2 : null);
-if (!$path) json_error('No se encontró variedades.json');
+if (!$path) json_error('No se encontró ofertas.json');
 
 $rawJson = file_get_contents($path);
-if (!$rawJson) json_error('No se pudo leer variedades.json');
+if (!$rawJson) json_error('No se pudo leer ofertas.json');
 
 $doc = json_decode($rawJson, true);
-if (!$doc) json_error('variedades.json inválido');
+if (!$doc) json_error('ofertas.json inválido');
 
 $datos = [];
-// Estructura típica export phpMyAdmin: buscar objeto "table" con name=variedades y su "data"
+// Estructura típica export phpMyAdmin: buscar objeto "table" con name=ofertas y su "data"
 if (isset($doc[2]['type']) && $doc[2]['type'] === 'table') {
   // formato como el que pasaste en el ejemplo
   $datos = $doc[2]['data'] ?? [];
@@ -50,33 +56,52 @@ if (isset($doc[2]['type']) && $doc[2]['type'] === 'table') {
   $datos = $doc['data'] ?? $doc;
 }
 
-if (!is_array($datos) || !count($datos)) json_error('Sin datos en variedades.json');
+if (!is_array($datos) || !count($datos)) json_error('Sin datos en ofertas.json');
 
 // --- Prepara índice por primer token y lista global ---
-$variedades = [];           // lista plana de nombres
-$porPrimerToken = [];       // token => [nombres...]
+$ofertas = [];              // lista completa de ofertas
+$variedades = [];           // lista plana de nombres de variedades
+$porPrimerToken = [];       // token => [ofertas...]
 foreach ($datos as $row) {
-  $nombre = $row['nombre'] ?? ($row['Nombre'] ?? null);
-  if (!$nombre) continue;
-  $variedades[] = $nombre;
+  $variedad = $row['variedad'] ?? null;
+  $cultivo = $row['cultivo'] ?? null;
+  $cliente = $row['cliente'] ?? null;
+  
+  if (!$variedad) continue;
+  
+  $oferta = [
+    'variedad' => $variedad,
+    'cultivo' => $cultivo,
+    'cliente' => $cliente,
+    'id' => $row['id'] ?? null
+  ];
+  
+  $ofertas[] = $oferta;
+  $variedades[] = $variedad;
 
-  $norm = normalizar($nombre);
+  $norm = normalizar($variedad);
   $primer = preg_match('/^[A-ZÁÉÍÓÚÑ0-9]+/', $norm, $m) ? $m[0] : null;
   if ($primer) {
-    $porPrimerToken[$primer][] = $nombre;
+    $porPrimerToken[$primer][] = $oferta;
   }
 }
 
 // --- Extrae patrones numéricos del OCR ---
 $patrones = [];
 
-// DD-DD, DDD-D, etc.
+// DD-DD, DDD-D, etc. (patrones de variedades como 60-4, 50-12)
 if (preg_match_all('/\b\d{2,3}-\d{1,3}\b/', $ocrn, $m1)) {
   $patrones = array_merge($patrones, $m1[0]);
 }
-// xDDD, xDDDD
+// xDDD, xDDDD (patrones como x500, x35)
 if (preg_match_all('/x\d{2,4}\b/i', $ocrn, $m2)) {
   $patrones = array_merge($patrones, array_map('strtoupper', $m2[0]));
+}
+// Patrones de variedades específicos: NOMBRE DD-DD
+if (preg_match_all('/\b([A-Z]{3,})\s+(\d{2,3}-\d{1,3})\b/', $ocrn, $m3)) {
+  foreach ($m3[0] as $match) {
+    $patrones[] = $match;
+  }
 }
 $patrones = array_values(array_unique($patrones));
 
@@ -101,7 +126,7 @@ foreach ($tokensFuerte as $tok) {
   $preferidos = [];
   $otros = [];
   foreach ($candidatosFamilia as $cand) {
-    $cNorm = normalizar($cand);
+    $cNorm = normalizar($cand['variedad']);
     $matchNum = false;
     foreach ($patrones as $p) {
       if (strpos($cNorm, $p) !== false) { $matchNum = true; break; }
@@ -119,7 +144,7 @@ foreach ($tokensFuerte as $tok) {
 
 // Si no hay shortlist, mete algunos patrones genéricos (top por frecuencia no la tenemos, así que toma primeras)
 if (!count($shortlist)) {
-  $shortlist = array_slice($variedades, 0, 12);
+  $shortlist = array_slice($ofertas, 0, 12);
 }
 
 // --- Prompt para Ollama (phi3) ---
@@ -130,8 +155,11 @@ Responde SIEMPRE en JSON válido y NADA MÁS.
 SYS;
 
 $shortlistStr = '';
-foreach ($shortlist as $s) {
-  $shortlistStr .= '"' . addslashes($s) . "\",\n";
+foreach ($shortlist as $oferta) {
+  $variedad = $oferta['variedad'];
+  $cultivo = $oferta['cultivo'] ? " (Cultivo: {$oferta['cultivo']})" : "";
+  $cliente = $oferta['cliente'] ? " (Cliente: {$oferta['cliente']})" : "";
+  $shortlistStr .= '"' . addslashes($variedad . $cultivo . $cliente) . "\",\n";
 }
 $shortlistStr = rtrim($shortlistStr, ",\n");
 
@@ -142,7 +170,10 @@ $user = <<<USR
 3) SHORTLIST: solo puedes elegir una de esta lista.
 
 # OBJETIVO
-Selecciona la variedad más probable del SHORTLIST usando patrones como 40-12, 50-4, x500, y cercanía a tokens "VARIETY"/"VAR:".
+Selecciona la OFERTA más probable del SHORTLIST usando patrones como:
+- NOMBRE-NÚMERO-NÚMERO (ej: MONDIAL 60-4, EXPLORER 50-12)
+- NOMBRE xNÚMERO (ej: FANCY ROJOx500)
+- Cercanía a tokens "VARIETY"/"VAR:".
 Ignora números logísticos como AWB/HAWB/RUC.
 
 # CONFIANZA
@@ -150,11 +181,10 @@ Devuelve "conf" 0..1 (≥0.80 muy seguro).
 
 # SALIDA ESTRICTA (JSON)
 {
-  "variedad": "<uno de SHORTLIST o \"\">",
+  "variedad": "<nombre de variedad del SHORTLIST o \"\">",
+  "cultivo": "<nombre del cultivo o \"\">",
+  "cliente": "<nombre del cliente o \"\">",
   "conf": <0..1>,
-  "candidates": [
-    {"nombre": "<shortlist>", "score": <0..1>}
-  ],
   "evidencia": "<máx 140 chars>"
 }
 
@@ -204,6 +234,8 @@ function call_ollama_chat($model, $system, $user) {
 }
 
 $variedad = '';
+$cultivo = '';
+$cliente = '';
 $conf = null;
 $evidencia = '';
 $ollamaOk = false;
@@ -222,6 +254,8 @@ if ($resp) {
   }
   if (isset($data['variedad'])) {
     $variedad = trim($data['variedad']);
+    $cultivo = isset($data['cultivo']) ? trim($data['cultivo']) : '';
+    $cliente = isset($data['cliente']) ? trim($data['cliente']) : '';
     $conf = isset($data['conf']) ? floatval($data['conf']) : null;
     $evidencia = isset($data['evidencia']) ? trim($data['evidencia']) : '';
     $ollamaOk = true;
@@ -231,35 +265,57 @@ if ($resp) {
 // --- Fallback heurístico si la IA no produjo salida usable ---
 if (!$ollamaOk || $variedad === '') {
   // Heurística mejorada: buscar coincidencias directas en la shortlist
-  $mejorCoincidencia = '';
+  $mejorCoincidencia = null;
   $mejorScore = 0;
   
   foreach ($shortlist as $candidato) {
-    $candidatoNorm = normalizar($candidato);
+    $candidatoNorm = normalizar($candidato['variedad']);
     $score = 0;
     
     // Coincidencia exacta
     if (strpos($ocrn, $candidatoNorm) !== false) {
       $score = 1.0;
     } else {
-      // Coincidencia parcial por palabras
-      $palabrasCandidato = preg_split('/\s+/', $candidatoNorm);
-      $palabrasOCR = preg_split('/\s+/', $ocrn);
-      $coincidencias = 0;
+      // Coincidencia por patrones numéricos específicos
+      $patronesCandidato = [];
+      if (preg_match_all('/\b\d{2,3}-\d{1,3}\b/', $candidatoNorm, $m)) {
+        $patronesCandidato = array_merge($patronesCandidato, $m[0]);
+      }
+      if (preg_match_all('/x\d{2,4}\b/i', $candidatoNorm, $m)) {
+        $patronesCandidato = array_merge($patronesCandidato, array_map('strtoupper', $m[0]));
+      }
       
-      foreach ($palabrasCandidato as $palabra) {
-        if (strlen($palabra) >= 3) { // Solo palabras significativas
-          foreach ($palabrasOCR as $palabraOCR) {
-            if (strpos($palabraOCR, $palabra) !== false || strpos($palabra, $palabraOCR) !== false) {
-              $coincidencias++;
-              break;
-            }
-          }
+      $coincidenciasPatrones = 0;
+      foreach ($patronesCandidato as $patron) {
+        if (strpos($ocrn, $patron) !== false) {
+          $coincidenciasPatrones++;
         }
       }
       
-      if (count($palabrasCandidato) > 0) {
-        $score = $coincidencias / count($palabrasCandidato);
+      if (count($patronesCandidato) > 0) {
+        $score = $coincidenciasPatrones / count($patronesCandidato);
+      }
+      
+      // Si no hay coincidencias de patrones, usar coincidencia parcial por palabras
+      if ($score == 0) {
+        $palabrasCandidato = preg_split('/\s+/', $candidatoNorm);
+        $palabrasOCR = preg_split('/\s+/', $ocrn);
+        $coincidencias = 0;
+        
+        foreach ($palabrasCandidato as $palabra) {
+          if (strlen($palabra) >= 3) { // Solo palabras significativas
+            foreach ($palabrasOCR as $palabraOCR) {
+              if (strpos($palabraOCR, $palabra) !== false || strpos($palabra, $palabraOCR) !== false) {
+                $coincidencias++;
+                break;
+              }
+            }
+          }
+        }
+        
+        if (count($palabrasCandidato) > 0) {
+          $score = $coincidencias / count($palabrasCandidato);
+        }
       }
     }
     
@@ -269,8 +325,10 @@ if (!$ollamaOk || $variedad === '') {
     }
   }
   
-  if ($mejorScore > 0.3) { // Umbral mínimo de confianza
-    $variedad = $mejorCoincidencia;
+  if ($mejorScore > 0.3 && $mejorCoincidencia) { // Umbral mínimo de confianza
+    $variedad = $mejorCoincidencia['variedad'];
+    $cultivo = $mejorCoincidencia['cultivo'] ?? '';
+    $cliente = $mejorCoincidencia['cliente'] ?? '';
     $conf = $mejorScore;
     $evidencia = 'Coincidencia heurística (' . round($mejorScore * 100) . '%)';
   } else {
@@ -328,6 +386,8 @@ if (!$ollamaOk || $variedad === '') {
 echo json_encode([
   'success' => $variedad !== '',
   'variedad' => $variedad,
+  'cultivo' => $cultivo,
+  'cliente' => $cliente,
   'conf' => $conf,
   'evidencia' => $evidencia,
 ]);

@@ -195,21 +195,38 @@ if (result.ParsedResults && result.ParsedResults.length > 0) {
 
     if (inferencia && inferencia.variedad) {
       // Muestra la variedad con información adicional
-      let resultado = `VARIEDAD DETECTADA:\n${inferencia.variedad}`;
+      let resultado = `🌹 VARIEDAD DETECTADA:\n${inferencia.variedad}`;
+      
+      if (inferencia.cultivo) {
+        resultado += `\n\n🏭 CULTIVO:\n${inferencia.cultivo}`;
+      }
+      
+      if (inferencia.cliente) {
+        resultado += `\n\n👤 CLIENTE:\n${inferencia.cliente}`;
+      }
+      
       if (inferencia.conf) {
-        resultado += `\n\nConfianza: ${Math.round(inferencia.conf * 100)}%`;
+        resultado += `\n\n📊 Confianza: ${Math.round(inferencia.conf * 100)}%`;
       }
+      
       if (inferencia.evidencia) {
-        resultado += `\n\nEvidencia: ${inferencia.evidencia}`;
+        resultado += `\n\n🔍 Evidencia: ${inferencia.evidencia}`;
       }
+      
       textoDetectado.textContent = resultado;
       
       // Log completo en consola
-      console.log('Variedad IA:', inferencia.variedad, 'conf:', inferencia.conf, 'evidencia:', inferencia.evidencia);
+      console.log('Oferta detectada:', {
+        variedad: inferencia.variedad,
+        cultivo: inferencia.cultivo,
+        cliente: inferencia.cliente,
+        conf: inferencia.conf,
+        evidencia: inferencia.evidencia
+      });
     } else {
       // Fallback con más información
-      textoDetectado.textContent = `No se pudo detectar variedad.\n\nTexto detectado:\n${cleanText}\n\nIntenta con mejor iluminación o enfoque.`;
-      console.log('No se pudo detectar variedad para el texto:', cleanText);
+      textoDetectado.textContent = `❌ No se pudo detectar oferta.\n\n📝 Texto detectado:\n${cleanText}\n\n💡 Intenta con mejor iluminación o enfoque.`;
+      console.log('No se pudo detectar oferta para el texto:', cleanText);
     }
   }
 
@@ -369,6 +386,8 @@ async function detectarVariedadIA(ocrText) {
     if (data && data.success && data.variedad) {
       return {
         variedad: data.variedad,
+        cultivo: data.cultivo || '',
+        cliente: data.cliente || '',
         conf: typeof data.conf === 'number' ? data.conf : null,
         evidencia: data.evidencia || ''
       };
