@@ -1,8 +1,10 @@
 // =========================
-// OCR + IA (Gemini) – Client-only (Vercel friendly)
+// OCR + IA (Gemini) – Client-only (Vercel friendly) usando OFERTAS
 // Requiere: Bootstrap 5 (modal), RemixIcon opcional.
 // Para usar Gemini: define window.GEMINI_API_KEY o <meta name="gemini-key" ...>
 // =========================
+
+// --- Comprobación rápida de Gemini ---
 window.pingGemini = async function () {
   try {
     const out = await callGeminiJSON(
@@ -32,16 +34,23 @@ const flashOverlay = document.getElementById('flashOverlay');
 
 let stream = null;
 
-// --------- Estado IA/Variedades ----------
+// --------- Estado IA/Ofertas ----------
 const GEMINI_MODEL = window.GEMINI_MODEL || 'gemini-2.5-flash';
 let GEMINI_API_KEY =
   (typeof window !== 'undefined' && window.GEMINI_API_KEY) ||
   (document.querySelector('meta[name="gemini-key"]')?.content) ||
   null;
 
-let VARIEDADES_LIST = [];                // ["PHOENIX 60-4", "EXPLORER 40-12", ...]
-let VARIEDADES_INDEX_PRIMER_TOKEN = {};  // { "PHOENIX": ["PHOENIX 60-4", ...], ... }
-let VARIEDADES_READY = false;
+// Datos cargados de ofertas.json
+let OFFERS_LIST = []; // [{id, articulo, variedad, cultivo, cliente, vuelo, ...}, ...]
+let OFFERS_READY = false;
+
+// Índices para shortlist rápidos
+const OFFERS_BY_VUELO = new Map();        // vueloNorm -> [offers...]
+const OFFERS_BY_CULTIVO = new Map();      // cultivoNorm -> [offers...]
+const OFFERS_BY_VAR_TOKEN = new Map();    // primerTokenVariedad -> [offers...]
+let CULTIVOS_NORM_UNICOS = [];            // lista de cultivos únicos normalizados (para búsqueda en OCR)
+const CULTIVO_ORIG_BY_NORM = new Map();   // cultivoNorm -> cultivo original (por si hay casing)
 
 // =========================
 // Helpers de UI
@@ -147,7 +156,7 @@ function fileToBase64(file) {
 }
 
 // =========================
-// Normalización + Heurísticas
+// Normalización + Heurísticas comunes
 // =========================
 function normalizarTexto(s) {
   if (!s) return '';
@@ -156,12 +165,17 @@ function normalizarTexto(s) {
   let out = sinTildes
     .toUpperCase()
     .replace(/[•·•·•·]/g, ' ')
-    .replace(/[^\w\s\-\+\/x]/g, ' ') // conserva -, +, / y 'x'
+    .replace(/[^\w\s\-\+\/x:]/g, ' ') // conserva -, +, /, x y ':'
     .replace(/\b(\d+)\s*-\s*(\d+)\b/g, '$1-$2')
     .replace(/\bx\s*(\d+)\b/gi, 'x$1')
     .replace(/\s+/g, ' ')
     .trim();
   return out;
+}
+
+function normalizeVuelo(s) {
+  if (!s) return '';
+  return s.toUpperCase().replace(/:/g, '').replace(/\s+/g, ' ').trim();
 }
 
 function detectarVuelo(texto) {
@@ -178,7 +192,7 @@ function detectarVuelo(texto) {
   ];
   for (const patron of patronesVuelo) {
     const match = texto.match(patron);
-    if (match) return match[0].replace(/^:/, '');
+    if (match) return match[0].replace(/^:/, ''); // sin ':'
   }
   return '';
 }
@@ -199,221 +213,8 @@ function tokensFuertes(ocrn) {
   return Array.from(new Set(ocrn.split(/\s+/))).filter(t => t && t.length >= 3 && !/^\d+$/.test(t) && !stop.has(t));
 }
 
-// =========================
-// Carga de variedades.json (cliente)
-// Admite export de phpMyAdmin como el ejemplo del usuario.
-// =========================
-async function loadVariedadesOnce() {
-  if (VARIEDADES_READY) return;
-  const posiblesRutas = [
-    '/variedades.json',
-    './variedades.json',
-    '../variedades.json',
-    '/data/variedades.json'
-  ];
-  let json = null;
-  for (const p of posiblesRutas) {
-    try {
-      const r = await fetch(p, { cache: 'no-store' });
-      if (r.ok) {
-        json = await r.json();
-        break;
-      }
-    } catch {}
-  }
-  if (!json) {
-    console.warn('No se pudo cargar variedades.json. La IA seguirá con heurísticas.');
-    VARIEDADES_LIST = [];
-    VARIEDADES_INDEX_PRIMER_TOKEN = {};
-    VARIEDADES_READY = true;
-    return;
-  }
-
-  // Detectar estructura:
-  // Caso 1 (phpMyAdmin): [ {type:"header"}, {type:"database"}, {type:"table", name:"variedades", data:[...] } ]
-  // Caso 2: { data: [...] } o directamente [ ... ]
-  let rows = [];
-  if (Array.isArray(json) && json[2]?.type === 'table') {
-    rows = json[2].data || [];
-  } else if (Array.isArray(json)) {
-    rows = json;
-  } else if (json?.data) {
-    rows = json.data;
-  }
-
-  // Extraer "nombre"
-  const nombres = [];
-  rows.forEach(r => {
-    const n = r.nombre || r.Nombre || r.variedad || r.Variedad;
-    if (n && typeof n === 'string') nombres.push(n.trim());
-  });
-
-  VARIEDADES_LIST = Array.from(new Set(nombres));
-
-  // Índice por primer token
-  VARIEDADES_INDEX_PRIMER_TOKEN = {};
-  for (const v of VARIEDADES_LIST) {
-    const norm = normalizarTexto(v);
-    const m = norm.match(/^[A-Z0-9]+/);
-    const primer = m ? m[0] : null;
-    if (!primer) continue;
-    if (!VARIEDADES_INDEX_PRIMER_TOKEN[primer]) VARIEDADES_INDEX_PRIMER_TOKEN[primer] = [];
-    VARIEDADES_INDEX_PRIMER_TOKEN[primer].push(v);
-  }
-  VARIEDADES_READY = true;
-  console.log(`Variedades cargadas: ${VARIEDADES_LIST.length}`);
-}
-
-// =========================
-/** Shortlist: usa tokens fuertes + patrones numéricos + primer token en catálogo */
-function construirShortlist(ocrn, maxTotal = 20, maxPorFamilia = 6) {
-  if (!VARIEDADES_READY) return [];
-  const pats = extraerPatronesNumericos(ocrn);
-  const tokens = tokensFuertes(ocrn);
-
-  const shortlist = [];
-  const ya = new Set();
-
-  for (const tok of tokens) {
-    const familia = VARIEDADES_INDEX_PRIMER_TOKEN[tok];
-    if (!familia) continue;
-
-    // priorizar los que contengan algún patrón numérico
-    const preferidos = [];
-    const otros = [];
-    for (const cand of familia) {
-      const norm = normalizarTexto(cand);
-      let matchNum = false;
-      for (const p of pats) {
-        if (norm.includes(p)) { matchNum = true; break; }
-      }
-      if (matchNum) preferidos.push(cand); else otros.push(cand);
-    }
-    const orden = [...preferidos, ...otros];
-
-    let cupo = maxPorFamilia;
-    for (const c of orden) {
-      if (shortlist.length >= maxTotal) break;
-      if (!ya.has(c)) {
-        shortlist.push(c);
-        ya.add(c);
-        cupo--;
-        if (cupo <= 0) break;
-      }
-    }
-    if (shortlist.length >= maxTotal) break;
-  }
-
-  if (!shortlist.length) {
-    // relleno por si hay cero tokens en catálogo (texto muy ruidoso)
-    return VARIEDADES_LIST.slice(0, Math.min(maxTotal, VARIEDADES_LIST.length));
-  }
-  return shortlist;
-}
-
-// =========================
-// Gemini – plantilla prompt
-// =========================
-function buildGeminiPrompt(systemText, userText) {
-  return {
-    // systemInstruction disponible en v1beta
-    systemInstruction: {
-      role: 'system',
-      parts: [{ text: systemText }]
-    },
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: userText }]
-      }
-    ]
-  };
-}
-
-function systemTemplate() {
-  return `Eres un analista experto en etiquetas de flores. Tu tarea es identificar la VARIEDAD exacta únicamente entre un LISTADO de candidatos (shortlist).
-Prohibido inventar nombres fuera del shortlist.
-Responde SIEMPRE en JSON válido y NADA MÁS.`;
-}
-
-function userTemplate({ ocr_text, ocrn, shortlist }) {
-  const sl = shortlist.map(s => `"${s.replace(/"/g, '\\"')}"`).join(',\n');
-  return `# CONTEXTO
-1) OCR_TEXT: texto bruto con posible ruido.
-2) OCR_TEXT_NORMALIZADO: mayúsculas, sin tildes, con separadores (-, +, /, x).
-3) SHORTLIST: solo puedes elegir UNA variedad de esta lista.
-
-# OBJETIVO
-Selecciona la variedad más probable del SHORTLIST usando patrones como 40-12, 50-4, x500 y cercanía a tokens "VARIETY"/"VAR:".
-Ignora números logísticos como AWB/HAWB/RUC.
-Si no hay coincidencia razonable, devuelve "variedad": "".
-
-# CONFIANZA
-Devuelve "conf" 0..1 (≥0.80 muy seguro).
-
-# SALIDA ESTRICTA (JSON)
-{
-  "variedad": "<uno del SHORTLIST o \\"\\" >",
-  "conf": <0..1>,
-  "candidates": [
-    {"nombre": "<shortlist>", "score": <0..1>}
-  ],
-  "evidencia": "<máx 140 chars>"
-}
-
-OCR_TEXT = <<<OCR
-${ocr_text}
-OCR
-
-OCR_TEXT_NORMALIZADO = <<<OCRN
-${ocrn}
-OCRN
-
-SHORTLIST = [
-${sl}
-]`;
-}
-
-// Llamada REST a Gemini v1beta
-async function callGeminiJSON(systemText, userText) {
-  if (!GEMINI_API_KEY) {
-    throw new Error('Falta GEMINI_API_KEY');
-  }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  const body = buildGeminiPrompt(systemText, userText);
-
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (!resp.ok) {
-    const txt = await resp.text().catch(() => '');
-    throw new Error(`Gemini HTTP ${resp.status} ${txt}`);
-  }
-  const data = await resp.json();
-  // estructura: candidates[0].content.parts[].text
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  if (!text) throw new Error('Gemini sin texto de salida');
-
-  // intentar parsear JSON
-  let parsed = null;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    const m = text.match(/\{[\s\S]*\}/);
-    if (m) {
-      try { parsed = JSON.parse(m[0]); } catch {}
-    }
-  }
-  if (!parsed) throw new Error('Gemini no devolvió JSON válido');
-  return parsed;
-}
-
-// =========================
-// Fallback heurístico si IA falla o no hay API key
-// =========================
-function inferirVariedadHeuristica(ocr_text) {
+// Heurística para extraer "variedad" textual del OCR (línea tras VARIETY o token+patrón)
+function inferirVariedadTextoDesdeOCR(ocr_text) {
   const ocrn = normalizarTexto(ocr_text);
   const lineas = ocrn.split(/\r?\n/);
 
@@ -442,52 +243,376 @@ function inferirVariedadHeuristica(ocr_text) {
   }
 
   if (candidata && numPat) {
-    return { variedad: `${candidata} ${numPat}`.replace(/\s+/g, ' ').trim(), conf: 0.62, evidencia: `Heurística VARIETY + ${numPat}` };
+    return `${candidata} ${numPat}`.replace(/\s+/g, ' ').trim();
   } else if (candidata) {
-    return { variedad: candidata, conf: 0.55, evidencia: 'Heurística VARIETY vecina' };
+    return candidata;
   } else if (numPat) {
     const m3 = ocrn.match(new RegExp(`([A-Z]{3,})(?:\\s+[A-Z]{3,}){0,2}\\s+${numPat.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}`));
-    if (m3) {
-      return { variedad: m3[0].trim(), conf: 0.58, evidencia: `Heurística token fuerte + ${numPat}` };
-    }
-    return { variedad: numPat, conf: 0.45, evidencia: 'Solo patrón numérico' };
+    if (m3) return m3[0].trim();
+    return numPat;
   }
-  return { variedad: '', conf: 0, evidencia: 'Sin señales suficientes' };
+  return '';
+}
+
+function primerTokenVariedad(s) {
+  const norm = normalizarTexto(s);
+  const m = norm.match(/^[A-Z0-9]+/);
+  return m ? m[0] : '';
 }
 
 // =========================
-// Detección IA (cliente) – usa shortlist + Gemini (si hay API key)
-// Devuelve: { variedad, conf, evidencia }
+// Carga de ofertas.json (cliente)
 // =========================
-async function detectarVariedadIA(ocrText) {
-  await loadVariedadesOnce();
-  const ocrn = normalizarTexto(ocrText);
-  const shortlist = construirShortlist(ocrn);
+async function loadOfertasOnce() {
+  if (OFFERS_READY) return;
 
-  // Si no hay clave o shortlist vacío, usa heurística directamente
+  const posiblesRutas = [
+    '/ofertas.json',
+    './ofertas.json',
+    '../ofertas.json',
+    '/data/ofertas.json'
+  ];
+
+  let json = null;
+  for (const p of posiblesRutas) {
+    try {
+      const r = await fetch(p, { cache: 'no-store' });
+      if (r.ok) {
+        json = await r.json();
+        break;
+      }
+    } catch {}
+  }
+  if (!json) {
+    console.warn('No se pudo cargar ofertas.json. Solo funcionará la heurística básica sin correspondencia a cliente.');
+    OFFERS_LIST = [];
+    OFFERS_READY = true;
+    return;
+  }
+
+  // Estructuras admitidas:
+  // A) phpMyAdmin export: [ {type:"header"}, {type:"database"}, {type:"table", name:"ofertas", data:[...] } ]
+  // B) { data: [...] }
+  // C) [ {...}, {...} ]
+  let rows = [];
+  if (Array.isArray(json) && json[2]?.type === 'table') {
+    rows = json[2].data || [];
+  } else if (Array.isArray(json)) {
+    rows = json;
+  } else if (json?.data) {
+    rows = json.data;
+  }
+
+  OFFERS_LIST = rows.map(r => ({
+    id: r.id ?? r.ID ?? null,
+    articulo: r.articulo ?? r.Articulo ?? '',
+    variedad: r.variedad ?? r.Variedad ?? '',
+    cultivo: r.cultivo ?? r.Cultivo ?? '',
+    cliente: r.cliente ?? r.Cliente ?? '',
+    vuelo: r.vuelo ?? r.Vuelo ?? '',
+    fecha: r.fecha ?? r.Fecha ?? '',
+    ubicacion: r.ubicacion ?? r.Ubicacion ?? '',
+    disponible: r.disponible ?? r.Disponible ?? ''
+  }));
+
+  // Índices
+  OFFERS_BY_VUELO.clear();
+  OFFERS_BY_CULTIVO.clear();
+  OFFERS_BY_VAR_TOKEN.clear();
+  CULTIVOS_NORM_UNICOS = [];
+  CULTIVO_ORIG_BY_NORM.clear();
+
+  const cultivosSet = new Set();
+
+  for (const ofr of OFFERS_LIST) {
+    // Vuelo
+    const vKey = normalizeVuelo(ofr.vuelo || '');
+    if (vKey) {
+      if (!OFFERS_BY_VUELO.has(vKey)) OFFERS_BY_VUELO.set(vKey, []);
+      OFFERS_BY_VUELO.get(vKey).push(ofr);
+    }
+    // Cultivo
+    const cKey = normalizarTexto(ofr.cultivo || '');
+    if (cKey) {
+      if (!OFFERS_BY_CULTIVO.has(cKey)) OFFERS_BY_CULTIVO.set(cKey, []);
+      OFFERS_BY_CULTIVO.get(cKey).push(ofr);
+      cultivosSet.add(cKey);
+      if (!CULTIVO_ORIG_BY_NORM.has(cKey)) CULTIVO_ORIG_BY_NORM.set(cKey, ofr.cultivo);
+    }
+    // Primer token de variedad
+    const t = primerTokenVariedad(ofr.variedad || '');
+    if (t) {
+      if (!OFFERS_BY_VAR_TOKEN.has(t)) OFFERS_BY_VAR_TOKEN.set(t, []);
+      OFFERS_BY_VAR_TOKEN.get(t).push(ofr);
+    }
+  }
+  CULTIVOS_NORM_UNICOS = Array.from(cultivosSet);
+
+  OFFERS_READY = true;
+  console.log(`Ofertas cargadas: ${OFFERS_LIST.length}`);
+}
+
+// Detecta cultivo en OCR comparando contra cultivos de ofertas
+function detectarCultivo(ocrn) {
+  if (!CULTIVOS_NORM_UNICOS.length) return '';
+  let mejor = '';
+  for (const c of CULTIVOS_NORM_UNICOS) {
+    if (ocrn.includes(c) && c.length > mejor.length) {
+      mejor = c;
+    }
+  }
+  return mejor; // normalizado
+}
+
+// =========================
+// Construcción de SHORTLIST de OFERTAS
+// Lógica: vuelo → cultivo → similitud de variedad
+// =========================
+function construirShortlistOfertas(ocrText, ocrn, maxTotal = 20) {
+  if (!OFFERS_READY || !OFFERS_LIST.length) return [];
+
+  const vueloDet = detectarVuelo(ocrText);
+  const vueloKey = normalizeVuelo(vueloDet);
+  const cultivoDetNorm = detectarCultivo(ocrn);
+
+  let candidatos = [];
+
+  if (vueloKey && OFFERS_BY_VUELO.has(vueloKey)) {
+    candidatos = OFFERS_BY_VUELO.get(vueloKey).slice();
+  } else {
+    candidatos = OFFERS_LIST.slice(); // sin vuelo, abrimos a todas
+  }
+
+  if (cultivoDetNorm && OFFERS_BY_CULTIVO.has(cultivoDetNorm)) {
+    // Filtrar por cultivo si existe en el texto
+    const setIds = new Set(OFFERS_BY_CULTIVO.get(cultivoDetNorm).map(o => o.id));
+    candidatos = candidatos.filter(o => setIds.has(o.id));
+  }
+
+  // Scoring por similitud con la "variedad textual" + patrones numéricos
+  const varText = inferirVariedadTextoDesdeOCR(ocrText);
+  const varToken = primerTokenVariedad(varText);
+  const pats = extraerPatronesNumericos(ocrn);
+
+  function scoreOferta(ofr) {
+    let score = 0;
+
+    // Vuelo exacto = +0.5
+    if (vueloKey && normalizeVuelo(ofr.vuelo) === vueloKey) score += 0.5;
+
+    // Cultivo = +0.2
+    if (cultivoDetNorm && normalizarTexto(ofr.cultivo) === cultivoDetNorm) score += 0.2;
+
+    // Patrones numéricos en variedad = hasta +0.4
+    const vnorm = normalizarTexto(ofr.variedad || '');
+    let hits = 0;
+    for (const p of pats) if (vnorm.includes(p)) hits++;
+    if (pats.length) score += Math.min(0.4, (hits / pats.length) * 0.4);
+
+    // Coincidencia primer token variedad = +0.2
+    if (varToken && primerTokenVariedad(ofr.variedad || '') === varToken) score += 0.2;
+
+    // Pequeña bonificación si el token fuerte aparece en el nombre de variedad
+    const toks = tokensFuertes(ocrn);
+    let tokMatch = 0;
+    for (const t of toks) if (vnorm.includes(t)) { tokMatch = 1; break; }
+    score += tokMatch * 0.1;
+
+    return score;
+  }
+
+  const ordenadas = candidatos
+    .map(o => ({ o, s: scoreOferta(o) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, maxTotal)
+    .map(x => x.o);
+
+  // Si nada quedó (casos extremos), devolvemos primeras n del total
+  if (!ordenadas.length) return OFFERS_LIST.slice(0, Math.min(maxTotal, OFFERS_LIST.length));
+  return ordenadas;
+}
+
+// =========================
+// Gemini – plantilla prompt para OFERTAS
+// =========================
+function buildGeminiPrompt(systemText, userText) {
+  return {
+    systemInstruction: { role: 'system', parts: [{ text: systemText }] },
+    contents: [{ role: 'user', parts: [{ text: userText }] }],
+    generationConfig: { response_mime_type: 'application/json' } // fuerza JSON-mode
+  };
+}
+
+function systemTemplateOfertas() {
+  return `Eres un analista experto en etiquetas de flores. Tu tarea es identificar la OFERTA exacta únicamente entre un LISTADO de candidatos (shortlist).
+Debes elegir UNA oferta del shortlist (no inventes nada fuera).
+Devuelve SIEMPRE JSON válido y nada más.`;
+}
+
+function userTemplateOfertas({ ocr_text, ocrn, shortlist }) {
+  // El shortlist lo enviamos como objetos legibles con id y campos clave
+  const sl = shortlist.map(s => ({
+    id: String(s.id ?? ''),
+    variedad: String(s.variedad ?? ''),
+    cultivo: String(s.cultivo ?? ''),
+    cliente: String(s.cliente ?? ''),
+    vuelo: String(s.vuelo ?? '')
+  }));
+  return `# CONTEXTO
+1) OCR_TEXT (ruidoso)
+2) OCR_TEXT_NORMALIZADO (mayúsculas, sin tildes, separadores - + / x)
+3) SHORTLIST de OFERTAS: solo puedes elegir UNA por id.
+
+# OBJETIVO
+- Si hay un vuelo que coincida con OCR, priorízalo.
+- Si hay cultivo en OCR, úsalo para refinar.
+- Después, elige la oferta cuya VARIEDAD encaje mejor (patrones 40-12, 50-4, x500; cercanía a "VARIETY"/"VAR:").
+- Ignora números logísticos (AWB/HAWB/RUC).
+- Si no estás razonablemente seguro, elige la mejor del shortlist e indica una "conf" baja.
+
+# SALIDA JSON ESTRICTA
+{
+  "id": "<id de la oferta elegida o \\"\\" si ninguna>",
+  "variedad": "<texto>",
+  "cliente": "<texto>",
+  "cultivo": "<texto>",
+  "vuelo": "<texto>",
+  "conf": <0..1>,
+  "evidencia": "<<=140 chars con las palabras/números clave>"
+}
+
+OCR_TEXT = <<<OCR
+${ocr_text}
+OCR
+
+OCR_TEXT_NORMALIZADO = <<<OCRN
+${ocrn}
+OCRN
+
+SHORTLIST = ${JSON.stringify(sl, null, 2)}`;
+}
+
+// Llamada REST a Gemini v1beta
+async function callGeminiJSON(systemText, userText) {
+  if (!GEMINI_API_KEY) throw new Error('Falta GEMINI_API_KEY');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const body = buildGeminiPrompt(systemText, userText);
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => '');
+    throw new Error(`Gemini HTTP ${resp.status} ${txt}`);
+  }
+  const data = await resp.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  if (!text) throw new Error('Gemini sin texto de salida');
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+  }
+  if (!parsed) throw new Error('Gemini no devolvió JSON válido');
+  return parsed;
+}
+
+// =========================
+// Fallback heurístico de selección de oferta (sin IA)
+// =========================
+function seleccionarOfertaHeuristica(ocrText, ocrn) {
+  if (!OFFERS_LIST.length) {
+    // No tenemos ofertas para mapear a cliente
+    const varTxt = inferirVariedadTextoDesdeOCR(ocrText);
+    return { id: '', variedad: varTxt || '', cliente: '', cultivo: '', vuelo: '', conf: 0, evidencia: 'Sin ofertas.json' };
+  }
+
+  const shortlist = construirShortlistOfertas(ocrText, ocrn, 30);
+  // Reutilizamos el score de shortlist y elegimos la mejor
+  const vueloKey = normalizeVuelo(detectarVuelo(ocrText));
+  const cultivoDetNorm = detectarCultivo(ocrn);
+  const varToken = primerTokenVariedad(inferirVariedadTextoDesdeOCR(ocrText));
+  const pats = extraerPatronesNumericos(ocrn);
+
+  function score(ofr) {
+    let s = 0;
+    if (vueloKey && normalizeVuelo(ofr.vuelo) === vueloKey) s += 0.5;
+    if (cultivoDetNorm && normalizarTexto(ofr.cultivo) === cultivoDetNorm) s += 0.2;
+    const vnorm = normalizarTexto(ofr.variedad);
+    let hits = 0; for (const p of pats) if (vnorm.includes(p)) hits++;
+    if (pats.length) s += Math.min(0.4, (hits / pats.length) * 0.4);
+    if (varToken && primerTokenVariedad(ofr.variedad) === varToken) s += 0.2;
+    return s;
+  }
+
+  const mejor = shortlist
+    .map(o => ({ o, s: score(o) }))
+    .sort((a, b) => b.s - a.s)[0];
+
+  if (mejor && mejor.o) {
+    return {
+      id: String(mejor.o.id ?? ''),
+      variedad: mejor.o.variedad || '',
+      cliente: mejor.o.cliente || '',
+      cultivo: mejor.o.cultivo || '',
+      vuelo: mejor.o.vuelo || '',
+      conf: Math.max(0.45, Math.min(0.9, mejor.s)), // escala orientativa
+      evidencia: `Heurística: vuelo/cultivo/patrones (${mejor.s.toFixed(2)})`
+    };
+  }
+
+  const varTxt = inferirVariedadTextoDesdeOCR(ocrText);
+  return { id: '', variedad: varTxt || '', cliente: '', cultivo: '', vuelo: '', conf: 0.3, evidencia: 'Sin señales fuertes' };
+}
+
+// =========================
+// Detección IA de OFERTA (cliente) – usa shortlist + Gemini
+// Devuelve: { id, variedad, cliente, cultivo, vuelo, conf, evidencia }
+// =========================
+async function detectarOfertaIA(ocrText) {
+  await loadOfertasOnce();
+  const ocrn = normalizarTexto(ocrText);
+
+  const shortlist = construirShortlistOfertas(ocrText, ocrn, 20);
+
   if (!GEMINI_API_KEY || !shortlist.length) {
     console.warn('IA: usando heurística (sin clave o sin shortlist).');
-    return inferirVariedadHeuristica(ocrText);
+    return seleccionarOfertaHeuristica(ocrText, ocrn);
   }
 
   try {
-    const sys = systemTemplate();
-    const usr = userTemplate({ ocr_text: ocrText, ocrn, shortlist });
+    const sys = systemTemplateOfertas();
+    const usr = userTemplateOfertas({ ocr_text: ocrText, ocrn, shortlist });
     const out = await callGeminiJSON(sys, usr);
 
-    const variedad = (out?.variedad || '').toString().trim();
-    const conf = typeof out?.conf === 'number' ? out.conf : null;
-    const evidencia = (out?.evidencia || '').toString().trim();
+    let { id = '', variedad = '', cliente = '', cultivo = '', vuelo = '', conf = null, evidencia = '' } = out || {};
+    id = String(id || '').trim();
 
-    if (variedad) {
-      return { variedad, conf, evidencia };
-    } else {
-      // Si Gemini dice vacío, intenta heurística
-      return inferirVariedadHeuristica(ocrText);
+    // Si Gemini devolvió un id no presente, cae a heurística
+    const ok = id && shortlist.some(x => String(x.id) === id);
+    if (!ok) {
+      console.warn('Gemini devolvió id fuera del shortlist → heurística');
+      return seleccionarOfertaHeuristica(ocrText, ocrn);
     }
+
+    // Completa campos si vienen vacíos
+    const ref = shortlist.find(x => String(x.id) === id);
+    if (ref) {
+      if (!variedad) variedad = ref.variedad || '';
+      if (!cliente) cliente = ref.cliente || '';
+      if (!cultivo) cultivo = ref.cultivo || '';
+      if (!vuelo) vuelo = ref.vuelo || '';
+    }
+
+    return { id, variedad, cliente, cultivo, vuelo, conf, evidencia };
   } catch (e) {
     console.warn('Gemini fallo → heurística. Motivo:', e.message || e);
-    return inferirVariedadHeuristica(ocrText);
+    return seleccionarOfertaHeuristica(ocrText, ocrn);
   }
 }
 
@@ -511,8 +636,7 @@ async function processOCR(imageData) {
 
     const ocrResponse = await fetch('https://api.ocr.space/parse/image', {
       method: 'POST',
-      headers: { 'apikey': 'helloworld' } // Demo key. Sustituye por tu key real para uso serio.
-      ,
+      headers: { 'apikey': 'helloworld' }, // Demo key. Sustituye por tu key real para uso serio.
       body: formData
     });
 
@@ -533,20 +657,18 @@ async function processOCR(imageData) {
       console.log('Texto OCR detectado:', cleanText);
       console.log('Texto normalizado:', normalizarTexto(cleanText));
 
-      // (Opcional) detectar vuelo solo para logs
-      const vueloDetectado = detectarVuelo(cleanText);
-      if (vueloDetectado) console.log('Vuelo detectado (debug):', vueloDetectado);
+      // 🔮 IA: decidir OFERTA → mostrar CLIENTE + VARIEDAD
+      textoDetectado.textContent = 'Asignando caja al cliente…';
+      const oferta = await detectarOfertaIA(cleanText);
 
-      // 🔮 IA: SOLO la variedad en el modal
-      textoDetectado.textContent = 'Detectando variedad…';
-      const inferencia = await detectarVariedadIA(cleanText);
-
-      if (inferencia && inferencia.variedad) {
-        textoDetectado.textContent = inferencia.variedad; // <- SOLO la variedad
-        console.log('Variedad IA:', inferencia.variedad, 'conf:', inferencia.conf, 'evidencia:', inferencia.evidencia);
+      if (oferta && (oferta.cliente || oferta.variedad)) {
+        // Muestra información mínima útil para logística
+        const linea = `CLIENTE: ${oferta.cliente || '—'}\nVARIEDAD: ${oferta.variedad || '—'}`;
+        textoDetectado.textContent = linea;
+        console.log('Oferta elegida:', oferta);
       } else {
-        textoDetectado.textContent = 'No se pudo inferir la variedad.';
-        console.log('No se pudo inferir variedad para el texto:', cleanText);
+        textoDetectado.textContent = 'No se pudo determinar cliente/variedad.';
+        console.log('Sin oferta clara para el texto:', cleanText);
       }
     }
 
