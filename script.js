@@ -93,70 +93,7 @@ const hideProgress = () => {
 };
 
 // =========================
-// Cámara
-// =========================
-async function startCamera() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    alert('Tu navegador no permite acceso a la cámara. Usa la opción "Subir foto".');
-    return;
-  }
-  try {
-    btnStart.textContent = 'Conectando...';
-    btnStart.disabled = true;
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false
-    });
-    video.srcObject = stream;
-    await video.play();
-    btnCapture.disabled = false;
-    btnCapture.classList.remove('processing');
-    btnStop.disabled = false;
-    btnStart.textContent = '✅ Cámara Activa';
-    btnStart.disabled = true;
-    console.log('Cámara iniciada correctamente');
-  } catch (err) {
-    console.error('Error:', err);
-    btnStart.disabled = false;
-    btnStart.textContent = 'Activar';
-    alert('No se pudo acceder a la cámara. Verifica los permisos.');
-  }
-}
-
-function stopCamera() {
-  if (stream) {
-    stream.getTracks().forEach(track => track.stop());
-    stream = null;
-  }
-  video.srcObject = null;
-  btnCapture.disabled = true;
-  btnCapture.classList.remove('processing');
-  btnStop.disabled = true;
-  btnStart.disabled = false;
-  btnStart.textContent = 'Activar';
-}
-
-function captureImage() {
-  const videoWidth = video.videoWidth || 1280;
-  const videoHeight = video.videoHeight || 720;
-  canvas.width = videoWidth;
-  canvas.height = videoHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
-  return canvas.toDataURL('image/jpeg', 0.9);
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-// =========================
-// Normalización + Heurísticas comunes
+/** Utilidades de normalización y señales */
 // =========================
 function normalizarTexto(s) {
   if (!s) return '';
@@ -175,20 +112,23 @@ function normalizarTexto(s) {
 
 function normalizeVuelo(s) {
   if (!s) return '';
+  // Mantiene guiones y espacios (para formatos tipo 999-9999 9999) y soporta 11 dígitos limpios
   return s.toUpperCase().replace(/:/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// ⚠️ AHORA también detecta 11 dígitos seguidos como posible vuelo (AWB)
 function detectarVuelo(texto) {
   if (!texto) return '';
   const patronesVuelo = [
-    /:\d{3}-\d{4}\s+\d{4}/,
-    /:\d{3}-\d{4}\s\d{4}/,
-    /\d{3}-\d{4}\s+\d{4}/,
-    /\d{3}-\d{4}\s\d{4}/,
-    /:\d{3}-\d{4}\d{4}/,
-    /\d{3}-\d{4}\d{4}/,
-    /:\d{3}-\d{4}/,
-    /\d{3}-\d{4}/,
+    /:\d{3}-\d{4}\s+\d{4}/,  // :999-9999 9999
+    /:\d{3}-\d{4}\s\d{4}/,   // :999-9999 9999
+    /\d{3}-\d{4}\s+\d{4}/,   // 999-9999 9999
+    /\d{3}-\d{4}\s\d{4}/,    // 999-9999 9999
+    /:\d{3}-\d{4}\d{4}/,     // :999-9999999
+    /\d{3}-\d{4}\d{4}/,      // 999-9999999
+    /:\d{3}-\d{4}/,          // :999-9999
+    /\d{3}-\d{4}/,           // 999-9999
+    /\b\d{11}\b/             // NUEVO: 11 dígitos seguidos
   ];
   for (const patron of patronesVuelo) {
     const match = texto.match(patron);
@@ -371,7 +311,7 @@ function detectarCultivo(ocrn) {
 function construirShortlistOfertas(ocrText, ocrn, maxTotal = 20) {
   if (!OFFERS_READY || !OFFERS_LIST.length) return [];
 
-  const vueloDet = detectarVuelo(ocrText);
+  const vueloDet = detectarVuelo(ocrText);          // ahora incluye 11 dígitos
   const vueloKey = normalizeVuelo(vueloDet);
   const cultivoDetNorm = detectarCultivo(ocrn);
 
@@ -571,8 +511,9 @@ function seleccionarOfertaHeuristica(ocrText, ocrn) {
 }
 
 // =========================
-// Detección IA de OFERTA (cliente) – usa shortlist + Gemini
-// Devuelve: { id, variedad, cliente, cultivo, vuelo, conf, evidencia }
+/** Detección IA de OFERTA (cliente) – usa shortlist + Gemini
+ * Devuelve: { id, variedad, cliente, cultivo, vuelo, conf, evidencia }
+ */
 // =========================
 async function detectarOfertaIA(ocrText) {
   await loadOfertasOnce();
@@ -655,20 +596,38 @@ async function processOCR(imageData) {
       textoDetectado.textContent = 'No se detectó texto en la imagen.';
     } else {
       console.log('Texto OCR detectado:', cleanText);
-      console.log('Texto normalizado:', normalizarTexto(cleanText));
+      const ocrn = normalizarTexto(cleanText);
+      console.log('Texto normalizado:', ocrn);
 
-      // 🔮 IA: decidir OFERTA → mostrar CLIENTE + VARIEDAD
+      // 🔮 IA: decidir OFERTA
       textoDetectado.textContent = 'Asignando caja al cliente…';
       const oferta = await detectarOfertaIA(cleanText);
 
+      // Datos detectados (independientes del modelo) para el modal:
+      const vueloDetectado = detectarVuelo(cleanText);          // incluye 11 dígitos
+      const cultivoDetNorm = detectarCultivo(ocrn);
+      const cultivoDetectadoPretty = cultivoDetNorm ? (CULTIVO_ORIG_BY_NORM.get(cultivoDetNorm) || cultivoDetNorm) : '';
+
       if (oferta && (oferta.cliente || oferta.variedad)) {
-        // Muestra información mínima útil para logística
-        const linea = `CLIENTE: ${oferta.cliente || '—'}\nVARIEDAD: ${oferta.variedad || '—'}`;
-        textoDetectado.textContent = linea;
-        console.log('Oferta elegida:', oferta);
+        // Construye bloque modal con cliente/variedad SIEMPRE +
+        // vuelo/cultivo detectados SOLO si existen
+        let lineas = [];
+        lineas.push(`CLIENTE: ${oferta.cliente || '—'}`);
+        lineas.push(`VARIEDAD: ${oferta.variedad || '—'}`);
+        if (vueloDetectado) lineas.push(`VUELO DETECTADO: ${vueloDetectado}`);
+        if (cultivoDetectadoPretty) lineas.push(`CULTIVO DETECTADO: ${cultivoDetectadoPretty}`);
+
+        textoDetectado.textContent = lineas.join('\n');
+        console.log('Oferta elegida:', oferta, 'VueloOCR:', vueloDetectado, 'CultivoOCR:', cultivoDetectadoPretty);
       } else {
-        textoDetectado.textContent = 'No se pudo determinar cliente/variedad.';
-        console.log('Sin oferta clara para el texto:', cleanText);
+        let lineas = ['No se pudo determinar cliente/variedad.'];
+        const vueloDetectado = detectarVuelo(cleanText);
+        const cultivoDetNorm = detectarCultivo(ocrn);
+        const cultivoDetectadoPretty = cultivoDetNorm ? (CULTIVO_ORIG_BY_NORM.get(cultivoDetNorm) || cultivoDetNorm) : '';
+        if (vueloDetectado) lineas.push(`VUELO DETECTADO: ${vueloDetectado}`);
+        if (cultivoDetectadoPretty) lineas.push(`CULTIVO DETECTADO: ${cultivoDetectadoPretty}`);
+        textoDetectado.textContent = lineas.join('\n');
+        console.log('Sin oferta clara. Señales OCR → Vuelo:', vueloDetectado, 'Cultivo:', cultivoDetectadoPretty);
       }
     }
 
@@ -713,8 +672,68 @@ async function processOCRLocal(imageData) {
 }
 
 // =========================
-// Eventos UI
+// Cámara + Eventos UI
 // =========================
+async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    alert('Tu navegador no permite acceso a la cámara. Usa la opción "Subir foto".');
+    return;
+  }
+  try {
+    btnStart.textContent = 'Conectando...';
+    btnStart.disabled = true;
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    btnCapture.disabled = false;
+    btnCapture.classList.remove('processing');
+    btnStop.disabled = false;
+    btnStart.textContent = '✅ Cámara Activa';
+    btnStart.disabled = true;
+    console.log('Cámara iniciada correctamente');
+  } catch (err) {
+    console.error('Error:', err);
+    btnStart.disabled = false;
+    btnStart.textContent = 'Activar';
+    alert('No se pudo acceder a la cámara. Verifica los permisos.');
+  }
+}
+
+function stopCamera() {
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+    stream = null;
+  }
+  video.srcObject = null;
+  btnCapture.disabled = true;
+  btnCapture.classList.remove('processing');
+  btnStop.disabled = true;
+  btnStart.disabled = false;
+  btnStart.textContent = 'Activar';
+}
+
+function captureImage() {
+  const videoWidth = video.videoWidth || 1280;
+  const videoHeight = video.videoHeight || 720;
+  canvas.width = videoWidth;
+  canvas.height = videoHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+  return canvas.toDataURL('image/jpeg', 0.9);
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 btnStart.addEventListener('click', startCamera);
 btnStop.addEventListener('click', stopCamera);
 
