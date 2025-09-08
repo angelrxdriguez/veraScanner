@@ -3,6 +3,19 @@
 // Requiere: Bootstrap 5 (modal), RemixIcon opcional.
 // Para usar Gemini: define window.GEMINI_API_KEY o <meta name="gemini-key" ...>
 // =========================
+window.pingGemini = async function () {
+  try {
+    const out = await callGeminiJSON(
+      'Eres un bot de prueba. Responde solo JSON.',
+      'Devuelve exactamente {"pong":true} y nada más.'
+    );
+    console.log('Ping Gemini →', out);
+    alert('Gemini OK: ' + JSON.stringify(out));
+  } catch (e) {
+    console.error('Ping Gemini fallo:', e);
+    alert('Gemini ERROR: ' + (e?.message || e));
+  }
+};
 
 // --------- Elementos del DOM ----------
 const video = document.getElementById('video');
@@ -20,7 +33,7 @@ const flashOverlay = document.getElementById('flashOverlay');
 let stream = null;
 
 // --------- Estado IA/Variedades ----------
-const GEMINI_MODEL = 'gemini-1.5-flash';
+const GEMINI_MODEL = window.GEMINI_MODEL || 'gemini-2.5-flash';
 let GEMINI_API_KEY =
   (typeof window !== 'undefined' && window.GEMINI_API_KEY) ||
   (document.querySelector('meta[name="gemini-key"]')?.content) ||
