@@ -262,7 +262,7 @@ modal.show();
     hideProgress();
     console.error('Error OCR:', error);
     
-    // Fallback: usar OCR local simple
+    // Fallback: usar OCR local simplew
     try {
       await processOCRLocal(imageData);
     } catch (fallbackError) {
