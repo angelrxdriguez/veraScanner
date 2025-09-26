@@ -1,6 +1,19 @@
-pingGemini()
+fecha y hora de escaneo
+tiempo de procesamiento en segundos.
+porcentaje de acierto -> % de como esta de segura de su respuesta
+info de lo procesado por la ia{
+    vuelo
+    variedad
+    cliente
+    cultivo
+} -> id de la oferta a la que lo relaciona{
+    vuelo
+    variedad
+    cliente
+    cultivo
+}
 
-
-
-
-hola
+---------UPDATE------------
+Para mejorar el flujo de información tendrás que elegir la ubicacion desde donde vas a realizar la busqueda.
+Deberás elegir los numeros de vuelos que vayas a recepcionar,
+en cada consulta, obtendrá las cajas en reparto NO recepcionadas e irá buscando.
