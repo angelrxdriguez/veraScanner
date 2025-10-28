@@ -40,10 +40,16 @@ let GEMINI_API_KEY =
   (typeof window !== 'undefined' && window.GEMINI_API_KEY) ||
   (document.querySelector('meta[name="gemini-key"]')?.content) ||
   null;
+// Umbral para decidir si hay ambigüedad (S1 - S2); ajusta 0.30–0.40
+const GEMINI_GAP_UMBRAL = 0.35;
 
 // Datos cargados de ofertas.json
 let OFFERS_LIST = []; // [{id, articulo, variedad, cultivo, cliente, vuelo, ...}, ...]
 let OFFERS_READY = false;
+// Prefetch: cargar ofertas al abrir la página (antes de cualquier escaneo)
+document.addEventListener('DOMContentLoaded', () => {
+  loadOfertasOnce().catch(err => console.warn('Prefetch ofertas falló:', err));
+});
 
 // Índices para shortlist rápidos
 const OFFERS_BY_VUELO = new Map();        // vueloNorm -> [offers...]
@@ -347,6 +353,44 @@ function construirShortlistOfertas(ocrText, ocrn, maxTotal = 20) {
   if (!ordenadas.length) return OFFERS_LIST.slice(0, Math.min(maxTotal, OFFERS_LIST.length));
   return ordenadas;
 }
+// Ranking local (reusa la misma lógica de score usada en shortlist)
+function rankearCandidatos(ocrText, ocrn, candidatos) {
+  const vueloKey = normalizeVuelo(detectarVuelo(ocrText));
+  const cultivoDetNorm = detectarCultivo(ocrn);
+  const varToken = primerTokenVariedad(inferirVariedadTextoDesdeOCR(ocrText));
+  const pats = extraerPatronesNumericos(ocrn);
+
+  function scoreOfertaLocal(ofr) {
+    let score = 0;
+    if (vueloKey && normalizeVuelo(ofr.vuelo) === vueloKey) score += 0.5;
+    if (cultivoDetNorm && normalizarTexto(ofr.cultivo) === cultivoDetNorm) score += 0.2;
+    const vnorm = normalizarTexto(ofr.variedad || '');
+    let hits = 0; for (const p of pats) if (vnorm.includes(p)) hits++;
+    if (pats.length) score += Math.min(0.4, (hits / pats.length) * 0.4);
+    if (varToken && primerTokenVariedad(ofr.variedad || '') === varToken) score += 0.2;
+
+    // pequeño plus si algún token fuerte aparece en la variedad
+    const toks = tokensFuertes(ocrn);
+    let tokMatch = 0; for (const t of toks) if (vnorm.includes(t)) { tokMatch = 1; break; }
+    score += tokMatch * 0.1;
+
+    return score;
+  }
+
+  return candidatos
+    .map(o => ({ o, s: scoreOfertaLocal(o) }))
+    .sort((a, b) => b.s - a.s);
+}
+
+// Evidencia fuerte: vuelo exacto + cultivo coincidente en el top
+function hayEvidenciaFuerte(ocrText, ocrn, top) {
+  if (!top) return false;
+  const vueloKey = normalizeVuelo(detectarVuelo(ocrText));
+  const cultivoDetNorm = detectarCultivo(ocrn);
+  const vueloOk = vueloKey && normalizeVuelo(top.vuelo) === vueloKey;
+  const cultivoOk = cultivoDetNorm && normalizarTexto(top.cultivo) === cultivoDetNorm;
+  return !!(vueloOk && cultivoOk);
+}
 
 // =========================
 // Gemini – plantilla prompt para OFERTAS
@@ -495,7 +539,34 @@ async function detectarOfertaIA(ocrText) {
   await loadOfertasOnce();
   const ocrn = normalizarTexto(ocrText);
 
-  const shortlist = construirShortlistOfertas(ocrText, ocrn, 20);
+const shortlist = construirShortlistOfertas(ocrText, ocrn, 20);
+
+// Sin IA si no hay datos o no hay clave
+if (!shortlist.length || !GEMINI_API_KEY) {
+  console.warn('IA: usando heurística (sin clave o sin shortlist).');
+  return seleccionarOfertaHeuristica(ocrText, ocrn);
+}
+
+// 1) Shortlist de 1 → no hay ambigüedad
+if (shortlist.length <= 1) {
+  return seleccionarOfertaHeuristica(ocrText, ocrn);
+}
+
+// 2) Gap claro entre el 1º y 2º → no llamamos a Gemini
+const ranking = rankearCandidatos(ocrText, ocrn, shortlist);
+const s1 = ranking[0]?.s ?? 0;
+const s2 = ranking[1]?.s ?? 0;
+const gap = s1 - s2;
+
+// 3) Evidencia fuerte (vuelo+cultivo) en el top → no llamamos a Gemini
+const evidenciaFuerte = hayEvidenciaFuerte(ocrText, ocrn, ranking[0]?.o);
+
+if (gap >= GEMINI_GAP_UMBRAL || evidenciaFuerte) {
+  // Nos quedamos con heurística (top)
+  return seleccionarOfertaHeuristica(ocrText, ocrn);
+}
+
+// Si llegamos aquí SÍ hay ambigüedad → usamos Gemini
 
   if (!GEMINI_API_KEY || !shortlist.length) {
     console.warn('IA: usando heurística (sin clave o sin shortlist).');
@@ -584,18 +655,20 @@ async function processOCR(imageData) {
       const cultivoDetNorm = detectarCultivo(ocrn);
       const cultivoDetectadoPretty = cultivoDetNorm ? (CULTIVO_ORIG_BY_NORM.get(cultivoDetNorm) || cultivoDetNorm) : '';
 
-      if (oferta && (oferta.cliente || oferta.variedad)) {
-        // Construye bloque modal con cliente/variedad SIEMPRE +
-        // vuelo/cultivo detectados SOLO si existen
-        let lineas = [];
-        lineas.push(`CLIENTE: ${oferta.cliente || '—'}`);
-        lineas.push(`VARIEDAD: ${oferta.variedad || '—'}`);
-        if (vueloDetectado) lineas.push(`VUELO DETECTADO: ${vueloDetectado}`);
-        if (cultivoDetectadoPretty) lineas.push(`CULTIVO DETECTADO: ${cultivoDetectadoPretty}`);
+   if (oferta && (oferta.cliente || oferta.variedad)) {
+  // Construye bloque modal con ID/cliente/variedad SIEMPRE +
+  // vuelo/cultivo detectados SOLO si existen
+  let lineas = [];
+  lineas.push(`ID OFERTA: ${oferta.id || '—'}`);
+  lineas.push(`CLIENTE: ${oferta.cliente || '—'}`);
+  lineas.push(`VARIEDAD: ${oferta.variedad || '—'}`);
+  if (vueloDetectado) lineas.push(`VUELO DETECTADO: ${vueloDetectado}`);
+  if (cultivoDetectadoPretty) lineas.push(`CULTIVO DETECTADO: ${cultivoDetectadoPretty}`);
 
-        textoDetectado.textContent = lineas.join('\n');
-        console.log('Oferta elegida:', oferta, 'VueloOCR:', vueloDetectado, 'CultivoOCR:', cultivoDetectadoPretty);
-      } else {
+  textoDetectado.textContent = lineas.join('\n');
+  console.log('Oferta elegida:', oferta, 'VueloOCR:', vueloDetectado, 'CultivoOCR:', cultivoDetectadoPretty);
+}
+ else {
         let lineas = ['No se pudo determinar cliente/variedad.'];
         const vueloDetectado = detectarVuelo(cleanText);
         const cultivoDetNorm = detectarCultivo(ocrn);

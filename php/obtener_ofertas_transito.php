@@ -1,25 +1,24 @@
 <?php
 /**
- * GET /api/ofertas/hoy-transito.php
- * Devuelve ofertas de HOY en ubicación = 'Tránsito' y es_outlet = 0
- * Campos mínimos para OCR/IA: id, articulo, variedad, cultivo, cliente, vuelo, fecha, ubicacion, disponible, reservado
+ * GET /api/ofertas/transito.php
+ * Devuelve ofertas con ubicación = 'Tránsito' y es_outlet = 0 (sin limitar por fecha)
+ * Campos: id, articulo, variedad, cultivo, cliente, vuelo, fecha, ubicacion, disponible, reservado
  *
  * Índices recomendados:
- *   CREATE INDEX idx_ofertas_fecha_ubicacion_outlet ON ofertas(fecha, ubicacion, es_outlet);
+ *   CREATE INDEX idx_ofertas_ubicacion_outlet ON ofertas(ubicacion, es_outlet);
  *   CREATE INDEX idx_ofertas_vuelo ON ofertas(vuelo);
  *   CREATE INDEX idx_ofertas_cultivo ON ofertas(cultivo);
  */
 
-// ==============================
-// 1) CREDENCIALES / CONEXIÓN DB
-// ==============================
 $host = '127.0.0.1';
 $port = '3306';
-$db   = 'ocr_db';  
-$user = 'admin_ocr';      
-$pass = 'tBbf5d7&9Z#Gapat';     
+$db   = 'ocr_db';
+$user = 'admin_ocr';
+$pass = 'tBbf5d7&9Z#Gapat';
+
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+
 $dsn = "mysql:host={$host};port={$port};dbname={$db};charset=utf8mb4";
 $options = [
   PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
@@ -29,6 +28,7 @@ $options = [
 
 try {
   $pdo = new PDO($dsn, $user, $pass, $options);
+
   $sql = "
     SELECT
       id,
@@ -42,10 +42,9 @@ try {
       disponible,
       reservado
     FROM ofertas
-    WHERE fecha = CURDATE()
-      AND ubicacion = 'Tránsito'
+    WHERE ubicacion = 'Tránsito'
       AND es_outlet = 0
-    ORDER BY cultivo, variedad, cliente, id
+    ORDER BY fecha DESC, cultivo, variedad, cliente, id
   ";
 
   $stmt = $pdo->prepare($sql);
