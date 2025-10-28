@@ -206,41 +206,17 @@ function primerTokenVariedad(s) {
 async function loadOfertasOnce() {
   if (OFFERS_READY) return;
 
-  const posiblesRutas = [
-    '/ofertas.json',
-    './ofertas.json',
-    '../ofertas.json',
-    '/data/ofertas.json'
-  ];
-
-  let json = null;
-  for (const p of posiblesRutas) {
-    try {
-      const r = await fetch(p, { cache: 'no-store' });
-      if (r.ok) {
-        json = await r.json();
-        break;
-      }
-    } catch {}
-  }
-  if (!json) {
-    console.warn('No se pudo cargar ofertas.json. Solo funcionará la heurística básica sin correspondencia a cliente.');
+  // *** CAMBIO: cargar desde el endpoint PHP en lugar de ofertas.json ***
+  let rows = [];
+  try {
+    const r = await fetch('./php/obtener_ofertas_transito.php', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    rows = await r.json(); // Se espera un array de objetos planos con campos ya correctos
+  } catch (e) {
+    console.warn('No se pudo cargar /php/obtener_ofertas_transito.php. Solo funcionará la heurística básica sin correspondencia a cliente.', e);
     OFFERS_LIST = [];
     OFFERS_READY = true;
     return;
-  }
-
-  // Estructuras admitidas:
-  // A) phpMyAdmin export: [ {type:"header"}, {type:"database"}, {type:"table", name:"ofertas", data:[...] } ]
-  // B) { data: [...] }
-  // C) [ {...}, {...} ]
-  let rows = [];
-  if (Array.isArray(json) && json[2]?.type === 'table') {
-    rows = json[2].data || [];
-  } else if (Array.isArray(json)) {
-    rows = json;
-  } else if (json?.data) {
-    rows = json.data;
   }
 
   OFFERS_LIST = rows.map(r => ({
