@@ -29,6 +29,7 @@ const fileInput = document.getElementById('fileInput');
 const ocrProgressWrap = document.getElementById('ocrProgressWrap');
 const ocrProgressBar = document.getElementById('ocrProgressBar');
 const textoDetectado = document.getElementById('textoDetectado');
+const datosDetectados = document.getElementById('datosDetectados'); // nuevo, segundo bloque
 const ocrLoading = document.getElementById('ocrLoading');
 const flashOverlay = document.getElementById('flashOverlay');
 
@@ -198,6 +199,35 @@ function inferirVariedadTextoDesdeOCR(ocr_text) {
     return numPat;
   }
   return '';
+}
+async function pintarDatosDetectadosDesdeServidor(ofertaId) {
+  if (!ofertaId) {
+    datosDetectados.textContent = '—';
+    return;
+  }
+  datosDetectados.textContent = 'Cargando datos…';
+
+  try {
+    const r = await fetch(`php/obtener_datos_detectados.php?id=${encodeURIComponent(ofertaId)}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+
+    // Si tallos_totales viniera null pero tenemos paquetes y tallos_paquete, calcúlalo en cliente:
+    let tt = d.tallos_totales;
+    if ((tt === null || typeof tt === 'undefined') && d.paquetes != null && d.tallos_paquete != null) {
+      tt = d.paquetes * d.tallos_paquete;
+    }
+
+    const lineas = [];
+    lineas.push(`LONGITUD (cm): ${d.longitud ?? '—'}`);
+    lineas.push(`PAQUETES: ${d.paquetes ?? '—'}`);
+    lineas.push(`TALLOS/PAQ.: ${d.tallos_paquete ?? '—'}`);
+    lineas.push(`TALLOS TOTALES: ${tt ?? '—'}`);
+    datosDetectados.textContent = lineas.join('\n');
+  } catch (e) {
+    console.warn('Falló obtener_datos_detectados:', e);
+    datosDetectados.textContent = '—';
+  }
 }
 
 function primerTokenVariedad(s) {
@@ -645,7 +675,6 @@ async function processOCR(imageData) {
       console.log('Texto OCR detectado:', cleanText);
       const ocrn = normalizarTexto(cleanText);
       console.log('Texto normalizado:', ocrn);
-
       // 🔮 IA: decidir OFERTA
       textoDetectado.textContent = 'Asignando caja al cliente…';
       const oferta = await detectarOfertaIA(cleanText);
@@ -655,9 +684,8 @@ async function processOCR(imageData) {
       const cultivoDetNorm = detectarCultivo(ocrn);
       const cultivoDetectadoPretty = cultivoDetNorm ? (CULTIVO_ORIG_BY_NORM.get(cultivoDetNorm) || cultivoDetNorm) : '';
 
-   if (oferta && (oferta.cliente || oferta.variedad)) {
-  // Construye bloque modal con ID/cliente/variedad SIEMPRE +
-  // vuelo/cultivo detectados SOLO si existen
+// Rama con oferta clara
+if (oferta && (oferta.cliente || oferta.variedad)) {
   let lineas = [];
   lineas.push(`ID OFERTA: ${oferta.id || '—'}`);
   lineas.push(`CLIENTE: ${oferta.cliente || '—'}`);
@@ -667,17 +695,24 @@ async function processOCR(imageData) {
 
   textoDetectado.textContent = lineas.join('\n');
   console.log('Oferta elegida:', oferta, 'VueloOCR:', vueloDetectado, 'CultivoOCR:', cultivoDetectadoPretty);
+
+  // ⬇️ NUEVO: pedir los datos numéricos al servidor por id
+  await pintarDatosDetectadosDesdeServidor(oferta.id);
+
+} else {
+  // Rama sin oferta clara
+  let lineas = ['No se pudo determinar cliente/variedad.'];
+  const vueloDetectado = detectarVuelo(cleanText);
+  const cultivoDetNorm = detectarCultivo(ocrn);
+  const cultivoDetectadoPretty = cultivoDetNorm ? (CULTIVO_ORIG_BY_NORM.get(cultivoDetNorm) || cultivoDetNorm) : '';
+  if (vueloDetectado) lineas.push(`VUELO DETECTADO: ${vueloDetectado}`);
+  if (cultivoDetectadoPretty) lineas.push(`CULTIVO DETECTADO: ${cultivoDetectadoPretty}`);
+  textoDetectado.textContent = lineas.join('\n');
+  console.log('Sin oferta clara. Señales OCR → Vuelo:', vueloDetectado, 'Cultivo:', cultivoDetectadoPretty);
+
+  datosDetectados.textContent = '—';
 }
- else {
-        let lineas = ['No se pudo determinar cliente/variedad.'];
-        const vueloDetectado = detectarVuelo(cleanText);
-        const cultivoDetNorm = detectarCultivo(ocrn);
-        const cultivoDetectadoPretty = cultivoDetNorm ? (CULTIVO_ORIG_BY_NORM.get(cultivoDetNorm) || cultivoDetNorm) : '';
-        if (vueloDetectado) lineas.push(`VUELO DETECTADO: ${vueloDetectado}`);
-        if (cultivoDetectadoPretty) lineas.push(`CULTIVO DETECTADO: ${cultivoDetectadoPretty}`);
-        textoDetectado.textContent = lineas.join('\n');
-        console.log('Sin oferta clara. Señales OCR → Vuelo:', vueloDetectado, 'Cultivo:', cultivoDetectadoPretty);
-      }
+
     }
 
     const modal = new bootstrap.Modal(document.getElementById('resultadoModal'));
@@ -742,7 +777,7 @@ async function startCamera() {
     btnCapture.disabled = false;
     btnCapture.classList.remove('processing');
     btnStop.disabled = false;
-    btnStart.textContent = '✅ Cámara Activa';
+    btnStart.textContent = 'Cámara Activa';
     btnStart.disabled = true;
     console.log('Cámara iniciada correctamente');
   } catch (err) {

@@ -21,7 +21,7 @@
 </head>
 <body>
   <main class="container py-4 app">
-    <header class="mb-4 d-flex align-items-center tit">
+    <header class="mb-4 d-flex tit">
       <span class="brand">OCR LECTOR DE ETIQUETAS</span>
     </header>
 
@@ -81,9 +81,14 @@
             <h5 class="modal-title">Oferta detectada</h5>
             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
           </div>
-          <div class="modal-body">
-            <pre id="textoDetectado" class="mb-0" style="white-space: pre-wrap; word-break: break-word;"></pre>
-          </div>
+     <div class="modal-body">
+  <pre id="textoDetectado" class="mb-3" style="white-space: pre-wrap; word-break: break-word;"></pre>
+
+  <hr class="border-secondary opacity-50 my-2">
+
+  <h6 class="text-secondary text-uppercase mb-2" style="letter-spacing:.06em">Datos detectados</h6>
+  <pre id="datosDetectados" class="small mb-0" style="white-space: pre-wrap; word-break: break-word;"></pre>
+</div>
           <div class="modal-footer">
             <button id="btnCopiar" type="button" class="btn btn-primary">Copiar</button>
             <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Cerrar</button>

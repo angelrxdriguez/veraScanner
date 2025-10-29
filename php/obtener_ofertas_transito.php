@@ -1,13 +1,7 @@
 <?php
 /**
  * GET /api/ofertas/transito.php
- * Devuelve ofertas con ubicación = 'Tránsito' y es_outlet = 0 (sin limitar por fecha)
- * Campos: id, articulo, variedad, cultivo, cliente, vuelo, fecha, ubicacion, disponible, reservado
- *
- * Índices recomendados:
- *   CREATE INDEX idx_ofertas_ubicacion_outlet ON ofertas(ubicacion, es_outlet);
- *   CREATE INDEX idx_ofertas_vuelo ON ofertas(vuelo);
- *   CREATE INDEX idx_ofertas_cultivo ON ofertas(cultivo);
+ * Devuelve ofertas de HOY con ubicación = 'Tránsito' y es_outlet = 0
  */
 
 $host = '127.0.0.1';
@@ -29,6 +23,10 @@ $options = [
 try {
   $pdo = new PDO($dsn, $user, $pass, $options);
 
+  // Fecha de "hoy" en Europe/Madrid para filtrar
+  $tz   = new DateTimeZone('Europe/Madrid');
+  $hoy  = (new DateTime('now', $tz))->format('Y-m-d');
+
   $sql = "
     SELECT
       id,
@@ -44,11 +42,12 @@ try {
     FROM ofertas
     WHERE ubicacion = 'Tránsito'
       AND es_outlet = 0
+      AND fecha = :hoy
     ORDER BY fecha DESC, cultivo, variedad, cliente, id
   ";
 
   $stmt = $pdo->prepare($sql);
-  $stmt->execute();
+  $stmt->execute([':hoy' => $hoy]);
   $rows = $stmt->fetchAll();
 
   foreach ($rows as &$r) {
